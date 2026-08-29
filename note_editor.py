@@ -1,9 +1,10 @@
 import os
 import time
+import shutil
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QLineEdit,
-    QPushButton, QFileDialog, QRadioButton, QFrame, QMessageBox, QScrollArea,
-    QComboBox, QColorDialog
+    QPushButton, QFileDialog, QRadioButton, QFrame, QMessageBox,
+    QComboBox, QColorDialog, QListView
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QIcon, QImage, QFont, QColor
@@ -44,6 +45,7 @@ class NotePaperTextEdit(QTextEdit):
 
 class NoteEditorWidget(QWidget):
     note_saved = Signal(dict)
+    audio_files_updated = Signal(dict)
 
     def __init__(self, db, audio_engine, parent=None):
         super().__init__(parent)
@@ -138,8 +140,9 @@ class NoteEditorWidget(QWidget):
         fmt_layout.addWidget(size_label)
 
         self.size_combo = QComboBox()
-        self.size_combo.setStyleSheet("font-size: 11px; min-width: 55px;")
-        for size in [12, 14, 16, 18, 20, 24, 28]:
+        self.size_combo.setView(QListView())
+        self.size_combo.setStyleSheet("min-width: 55px;")
+        for size in [12, 14, 16, 18, 20, 24, 28, 32, 36]:
             self.size_combo.addItem(str(size), size)
         self.size_combo.setCurrentText("14")
         self.size_combo.currentIndexChanged.connect(self.on_size_changed)
@@ -200,6 +203,7 @@ class NoteEditorWidget(QWidget):
         # In-App Audio Player Widget
         self.audio_player = InAppAudioPlayerWidget()
         self.audio_player.recording_requested.connect(self.toggle_recording)
+        self.audio_player.import_requested.connect(self.import_audio_file)
         self.audio_player.audio_deleted.connect(self.delete_audio_track)
         self.layout.addWidget(self.audio_player)
 
@@ -284,7 +288,7 @@ class NoteEditorWidget(QWidget):
             return
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.webp *.gif)"
+            self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.webp *.gif *.bmp)"
         )
         if file_path:
             self.on_image_pasted(file_path)
@@ -462,32 +466,77 @@ class NoteEditorWidget(QWidget):
         if not self.audio_engine.is_recording:
             self.audio_engine.start_recording()
             self.audio_player.rec_btn.setText("Recording...")
-            self.audio_player.rec_btn.setStyleSheet("background-color: #DC2626; font-weight: bold; font-size: 11px;")
+            self.audio_player.rec_btn.setStyleSheet("background-color: #DC2626; font-weight: bold; font-size: 11px; padding: 3px 8px;")
         else:
             path, duration = self.audio_engine.stop_recording()
             self.audio_player.rec_btn.setText("+ Record Voice")
-            self.audio_player.rec_btn.setStyleSheet("background-color: #B91C1C; font-weight: bold; font-size: 11px;")
+            self.audio_player.rec_btn.setStyleSheet("background-color: #B91C1C; font-weight: bold; font-size: 11px; padding: 3px 8px;")
             
             audio_files = self.current_note.setdefault("audio_files", [])
+            track_name = f"Voice #{len(audio_files)+1}"
             new_clip = {
                 "path": path,
                 "duration": duration,
-                "name": f"Voice #{len(audio_files)+1}"
+                "name": track_name
             }
             audio_files.append(new_clip)
 
             transcript = self.audio_engine.transcribe_audio(path)
             summary = self.audio_engine.generate_summary(transcript)
-            self.current_note["transcript"] = (self.current_note.get("transcript", "") + "\n\n" + transcript).strip()
+            existing_tr = self.current_note.get("transcript", "")
+            self.current_note["transcript"] = (existing_tr + "\n\n" + f"[{track_name}]\n" + transcript).strip()
             self.current_note["summary"] = summary
 
             self.audio_player.load_audio_files(audio_files)
             self.db.add_or_update_note(self.current_note)
+            self.audio_files_updated.emit(self.current_note)
+
+    def import_audio_file(self):
+        if not self.current_note:
+            QMessageBox.warning(self, "Warning", "Select or create a note before adding audio.")
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Audio File", "", "Audio Files (*.wav *.mp3 *.m4a *.aac *.flac *.ogg *.wma)"
+        )
+        if not file_path:
+            return
+
+        os.makedirs(MEDIA_DIR, exist_ok=True)
+        ext = os.path.splitext(file_path)[1]
+        dest_filename = f"audio_{int(time.time() * 1000)}{ext}"
+        dest_path = os.path.join(MEDIA_DIR, dest_filename)
+        shutil.copy2(file_path, dest_path)
+
+        duration = self.audio_engine.get_audio_duration(dest_path)
+        audio_files = self.current_note.setdefault("audio_files", [])
+        base_title = os.path.splitext(os.path.basename(file_path))[0]
+        track_name = f"{base_title[:18]}" if base_title else f"Audio #{len(audio_files)+1}"
+
+        new_clip = {
+            "path": dest_path,
+            "duration": duration,
+            "name": track_name
+        }
+        audio_files.append(new_clip)
+
+        transcript = self.audio_engine.transcribe_audio(dest_path)
+        summary = self.audio_engine.generate_summary(transcript)
+        existing_tr = self.current_note.get("transcript", "")
+        self.current_note["transcript"] = (existing_tr + "\n\n" + f"[{track_name}]\n" + transcript).strip()
+        self.current_note["summary"] = summary
+
+        self.audio_player.load_audio_files(audio_files)
+        self.db.add_or_update_note(self.current_note)
+        self.audio_files_updated.emit(self.current_note)
 
     def delete_audio_track(self, track_obj):
         if self.current_note and "audio_files" in self.current_note:
+            target_path = track_obj.get("path") if isinstance(track_obj, dict) else track_obj
             self.current_note["audio_files"] = [
-                a for a in self.current_note["audio_files"] if a.get("path") != track_obj.get("path")
+                a for a in self.current_note["audio_files"] 
+                if (a.get("path") if isinstance(a, dict) else a) != target_path
             ]
             self.audio_player.load_audio_files(self.current_note["audio_files"])
             self.db.add_or_update_note(self.current_note)
+            self.audio_files_updated.emit(self.current_note)

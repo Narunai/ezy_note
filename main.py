@@ -118,11 +118,15 @@ class NoteGodApp(QMainWindow):
 
         # Tab 1: Note & Media
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
+        self.editor_tab.audio_files_updated.connect(self.on_audio_files_updated)
         self.tabs.addTab(self.editor_tab, "Note & Media")
 
         # Tab 2: Transcript & Summary
         self.transcript_tab = TranscriptViewWidget(self.audio_engine, self.db)
+        self.transcript_tab.transcript_updated.connect(self.on_transcript_updated)
         self.tabs.addTab(self.transcript_tab, "Transcript & AI Summary")
+
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
         content_layout.addWidget(self.tabs, 1)
         main_layout.addWidget(content_area, 1)
@@ -154,6 +158,31 @@ class NoteGodApp(QMainWindow):
         else:
             self.show()
             self.activateWindow()
+
+    def on_tab_changed(self, index):
+        if not self.current_note:
+            return
+        if index == 1:
+            # Switched to Transcript tab -> sync note data from editor to transcript tab
+            editor_data = self.editor_tab.get_current_data()
+            if editor_data:
+                self.current_note.update(editor_data)
+            self.transcript_tab.load_note(self.current_note)
+        elif index == 0:
+            # Switched to Note Editor tab -> sync transcript data
+            transcript_data = self.transcript_tab.get_updated_data()
+            if transcript_data:
+                self.current_note.update(transcript_data)
+            self.editor_tab.load_note(self.current_note)
+
+    def on_audio_files_updated(self, note):
+        self.current_note = note
+        self.transcript_tab.load_note(note)
+        self.sidebar.refresh_notes()
+
+    def on_transcript_updated(self, note):
+        self.current_note = note
+        self.sidebar.refresh_notes()
 
     def on_note_selected(self, note):
         self.save_current_note()
@@ -190,17 +219,22 @@ class NoteGodApp(QMainWindow):
             return
 
         editor_data = self.editor_tab.get_current_data()
-        transcript_data = self.transcript_tab.get_updated_data()
-
         self.current_note["title"] = self.title_input.text() or "Untitled Note"
         if editor_data:
             self.current_note["content"] = editor_data.get("content", "")
+            self.current_note["content_html"] = editor_data.get("content_html", "")
             self.current_note["image_position"] = editor_data.get("image_position", "inline")
-            self.current_note["images"] = editor_data.get("images", [])
+            if "images" in editor_data:
+                self.current_note["images"] = editor_data.get("images", [])
 
+        transcript_data = self.transcript_tab.get_updated_data()
         if transcript_data:
-            self.current_note["transcript"] = transcript_data.get("transcript", "")
-            self.current_note["summary"] = transcript_data.get("summary", "")
+            tr = transcript_data.get("transcript")
+            sm = transcript_data.get("summary")
+            if tr or self.tabs.currentIndex() == 1:
+                self.current_note["transcript"] = tr or ""
+            if sm or self.tabs.currentIndex() == 1:
+                self.current_note["summary"] = sm or ""
 
         saved_note = self.db.add_or_update_note(self.current_note)
         self.sidebar.refresh_notes()

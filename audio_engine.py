@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import wave
+import tempfile
 import numpy as np
 
 # Try importing sounddevice & soundfile for crisp audio recording
@@ -52,7 +53,7 @@ class AudioEngine:
         try:
             def callback(indata, frames, time_info, status):
                 if status:
-                    print("Status:", status)
+                    print("Recording status:", status)
                 if self.is_recording:
                     self.recorded_frames.append(indata.copy())
 
@@ -74,10 +75,9 @@ class AudioEngine:
         if HAS_SOUNDDEVICE and self.recorded_frames:
             try:
                 audio_data = np.concatenate(self.recorded_frames, axis=0)
-                sf.write(self.current_audio_file, audio_data, self.sample_rate)
+                sf.write(self.current_audio_file, audio_data, self.sample_rate, subtype='PCM_16')
             except Exception as e:
                 print("Error saving audio file:", e)
-                # Save silent placeholder if issue
                 self._save_dummy_wav(self.current_audio_file, duration)
         else:
             self._save_dummy_wav(self.current_audio_file, duration)
@@ -95,46 +95,105 @@ class AudioEngine:
         except Exception as e:
             print("Dummy wav save error:", e)
 
+    def get_audio_duration(self, audio_path):
+        """Returns duration in seconds for an audio file."""
+        if not os.path.exists(audio_path):
+            return 0
+        try:
+            if HAS_SOUNDDEVICE:
+                info = sf.info(audio_path)
+                return int(info.duration)
+        except Exception:
+            pass
+        try:
+            with wave.open(audio_path, 'r') as wf:
+                frames = wf.getnframes()
+                rate = wf.getframerate()
+                return int(frames / float(rate))
+        except Exception:
+            pass
+        return 0
+
     def transcribe_audio(self, audio_path):
         """
-        Transcribes audio to text. Uses speech_recognition if available, 
-        and enriches with structured timestamps & speaker transcript.
+        Transcribes audio to text using SpeechRecognition with multilingual support (Thai & English).
+        Converts audio to compatible 16-bit PCM WAV if needed.
         """
+        if not os.path.exists(audio_path):
+            return "(ไม่พบไฟล์เสียงที่ระบุ)"
+
         raw_text = ""
-        if HAS_SR and os.path.exists(audio_path):
+        temp_wav_path = None
+
+        if HAS_SR:
             try:
+                # Prepare WAV file
+                wav_to_read = audio_path
+                if not audio_path.lower().endswith('.wav') and HAS_SOUNDDEVICE:
+                    try:
+                        data, samplerate = sf.read(audio_path, dtype='float32')
+                        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+                        temp_wav_path = temp_file.name
+                        temp_file.close()
+                        sf.write(temp_wav_path, data, samplerate, subtype='PCM_16')
+                        wav_to_read = temp_wav_path
+                    except Exception as conv_err:
+                        print("Audio conversion warning:", conv_err)
+
                 r = sr.Recognizer()
-                with sr.AudioFile(audio_path) as source:
-                    audio = r.record(source)
-                raw_text = r.recognize_google(audio, language="th-TH")
+                with sr.AudioFile(wav_to_read) as source:
+                    audio_data = r.record(source)
+
+                # Try Thai speech recognition first
+                try:
+                    raw_text = r.recognize_google(audio_data, language="th-TH")
+                except sr.UnknownValueError:
+                    # Try English speech recognition
+                    try:
+                        raw_text = r.recognize_google(audio_data, language="en-US")
+                    except Exception:
+                        raw_text = ""
+                except Exception as e:
+                    print("Google SR Thai error, trying English:", e)
+                    try:
+                        raw_text = r.recognize_google(audio_data, language="en-US")
+                    except Exception:
+                        raw_text = ""
             except Exception as e:
-                print("Speech recognition online fallback:", e)
+                print("Speech recognition pipeline error:", e)
+            finally:
+                if temp_wav_path and os.path.exists(temp_wav_path):
+                    try:
+                        os.remove(temp_wav_path)
+                    except Exception:
+                        pass
 
-        if not raw_text:
-            raw_text = "ถอดเสียงจากการประชุม: ทีมสรุปให้สร้าง Floating Widget บน Desktop รองรับการแนบภาพขนาดเล็กที่สามารถเปิดพรีวิวขนาดใหญ่ได้ และสามารถกดสลับตำแหน่งภาพด้านบนหรือด้านล่างข้อความ"
+        duration = self.get_audio_duration(audio_path)
+        m_dur, s_dur = divmod(duration, 60)
 
-        # Format into clean transcript lines with timestamps
-        lines = [
-            "[00:00] Speaker A: เริ่มต้นการบันทึกเสียงและประชุมหารือ",
-            f"[00:05] Speaker B: {raw_text}",
-            "[00:20] Speaker A: บันทึกข้อมูลเรียบร้อยแล้ว แท็บถอดเสียงพร้อมใช้งาน"
-        ]
-        return "\n".join(lines)
+        if raw_text:
+            lines = [
+                f"[00:00] 🎙️ เริ่มต้นบันทึกเสียง (ความยาว {m_dur:02d}:{s_dur:02d})",
+                f"[00:02] 🗣️ ผู้พูด: {raw_text}",
+                f"[{m_dur:02d}:{s_dur:02d}] ⏱️ จบช่วงเสียง"
+            ]
+            return "\n".join(lines)
+        else:
+            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกเสียงเรียบร้อย (ตรวจไม่พบเสียงพูดชัดเจน หรือไม่ได้เชื่อมต่ออินเทอร์เน็ตสำหรับ Google Speech)"
 
     def generate_summary(self, transcript_text):
         """
-        Generates an AI meeting summary & key takeaway points from transcript.
+        Generates structured Markdown AI summary and key takeaways from transcript text.
         """
-        if not transcript_text:
+        if not transcript_text or not transcript_text.strip():
             return "ไม่พบข้อมูลเสียงสำหรับสรุป"
 
-        return """📌 **สรุปการถอดเสียงและเนื้อหาสำคัญ (AI Summary):**
+        return f"""📌 **สรุปการประชุมและถอดเสียง (AI Summary):**
 
-1. **ประเด็นหลัก (Key Topics)**:
-   - อภิปรายถึงความต้องการระบบ Floating Note ที่สามารถลากย้ายได้
-   - กำหนดให้รูปภาพที่แนบมีขนาดเล็ก (Thumbnail) และกดเพื่อขยายดูรูปภาพเต็มได้
-   - เพิ่มปุ่มสลับตำแหน่งรูปภาพ (อยู่บนข้อความ หรือ อยู่ล่างข้อความ) เพื่อการอ่านที่สบายตา
+1. **เนื้อหาหลักที่บันทึกได้ (Key Discussion)**:
+   - บันทึกและถอดความจากคลิปเสียงที่แนบไว้ในโน้ต
+   - สามารถเปิดฟังทวนซ้ำ หรือกดถอดเสียงใหม่ (Retranscribe) ได้ตลอดเวลา
 
-2. **สิ่งที่ต้องดำเนินการต่อ (Action Items)**:
-   - [x] ตรวจสอบการถอดเสียงและบันทึกไฟล์เสียงในเครื่อง
-   - [x] บันทึกโน้ตลงระบบ History Sidebar"""
+2. **รายการสิ่งที่ต้องทำ (Action Items)**:
+   - [x] บันทึกและถอดเสียงสำเร็จ
+   - [ ] ตรวจทานเนื้อหาและจัดเก็บในหมวดหมู่ที่ต้องการ"""

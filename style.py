@@ -130,6 +130,65 @@ QTabBar::tab:hover:!selected {
     color: #F5EFE6;
 }
 
+/* QComboBox Global Styling - Crisp Dark & High Contrast */
+QComboBox {
+    background-color: #26221E;
+    color: #F5EFE6;
+    border: 1px solid #3D3730;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    min-height: 22px;
+}
+QComboBox:hover {
+    border: 1px solid #8B5E3C;
+    background-color: #2E2924;
+}
+QComboBox:focus {
+    border: 1px solid #D4A373;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #3D3730;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+    background-color: #201D1A;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-top: 5px solid #D4A373;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    width: 0px;
+    height: 0px;
+}
+QComboBox QAbstractItemView {
+    background-color: #201D1A;
+    color: #F5EFE6;
+    selection-background-color: #8B5E3C;
+    selection-color: #FFFFFF;
+    border: 1px solid #3D3730;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 3px 8px;
+    color: #F5EFE6;
+    border-radius: 3px;
+}
+QComboBox QAbstractItemView::item:hover {
+    background-color: #332E28;
+    color: #FFFFFF;
+}
+QComboBox QAbstractItemView::item:selected {
+    background-color: #8B5E3C;
+    color: #FFFFFF;
+}
+
 /* Crisp Warm Note Paper Canvas */
 QTextEdit#NotePaperEdit {
     background-color: #FAF8F5;
