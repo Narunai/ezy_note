@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QHBoxLayout
-from PySide6.QtCore import Qt, Signal, QPoint, QSize
-from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QFont, QCursor, QIcon
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, Signal, QPoint
+from PySide6.QtGui import QCursor
 
 class FloatingNoteWidget(QWidget):
     clicked = Signal()
@@ -14,9 +14,11 @@ class FloatingNoteWidget(QWidget):
             Qt.SubWindow
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.resize(70, 70)
+        
+        # Compact, sleek minimalist dimensions (44x44 px)
+        self.widget_size = 44
+        self.resize(self.widget_size, self.widget_size)
 
-        # Position widget initially on right side of screen
         self.drag_position = QPoint()
         self.is_dragging = False
 
@@ -24,38 +26,44 @@ class FloatingNoteWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignCenter)
 
-        # Floating Card Container
+        # Minimalist Warm Sepia Floating Button
         self.card = QLabel("📝", self)
         self.card.setAlignment(Qt.AlignCenter)
         self.card.setStyleSheet("""
             QLabel {
-                background-color: #6366F1;
-                border: 3px solid #818CF8;
-                border-radius: 35px;
-                font-size: 30px;
+                background-color: #26221E;
+                color: #F5EFE6;
+                border: 1.5px solid #4A3E34;
+                border-radius: 22px;
+                font-size: 18px;
             }
             QLabel:hover {
-                background-color: #4F46E5;
-                border: 3px solid #A5B4FC;
+                background-color: #332D27;
+                border: 1.5px solid #D4A373;
+                color: #FFFFFF;
             }
         """)
-        self.card.setFixedSize(70, 70)
+        self.card.setFixedSize(self.widget_size, self.widget_size)
         self.card.setCursor(Qt.PointingHandCursor)
+        self.card.setToolTip("Click to toggle NoteGod | Drag to move")
         layout.addWidget(self.card)
 
-        # Badge count label
+        # Minimal badge count label
         self.badge = QLabel("1", self)
         self.badge.setStyleSheet("""
             QLabel {
-                background-color: #EF4444;
+                background-color: #B91C1C;
                 color: #FFFFFF;
-                border-radius: 10px;
-                font-size: 11px;
+                border-radius: 7px;
+                font-size: 9px;
                 font-weight: bold;
-                padding: 2px 6px;
+                padding: 1px 4px;
+                min-width: 14px;
+                max-height: 14px;
             }
         """)
-        self.badge.move(46, 4)
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.move(self.widget_size - 16, 2)
         self.badge.hide()
 
     def set_badge_count(self, count):
@@ -79,7 +87,6 @@ class FloatingNoteWidget(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self.is_dragging:
-                # If mouse moved only slightly, consider it a click!
                 move_dist = (event.globalPosition().toPoint() - self.frameGeometry().topLeft() - self.drag_position).manhattanLength()
                 if move_dist < 5:
                     self.clicked.emit()
