@@ -24,6 +24,8 @@ class NoteGodApp(QMainWindow):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.resize(1020, 680)
+        self.setMinimumSize(360, 420)
+        self.setMouseTracking(True)
 
         # Initialize Database & Audio Engine
         self.db = NoteDatabase()
@@ -35,12 +37,13 @@ class NoteGodApp(QMainWindow):
 
         # Root Outer Container with Custom TitleBar
         root_widget = QWidget()
+        root_widget.setMouseTracking(True)
         self.setCentralWidget(root_widget)
         root_layout = QVBoxLayout(root_widget)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # Custom Minimalist TitleBar
+        # Custom Minimalist TitleBar (supports Windows Snap & Drag)
         self.title_bar = CustomTitleBar(self)
         root_layout.addWidget(self.title_bar)
 
@@ -116,7 +119,7 @@ class NoteGodApp(QMainWindow):
         # Tabs Widget (Tab 1: Note & Media, Tab 2: Transcript & Summary)
         self.tabs = QTabWidget()
 
-        # Tab 1: Note & Media
+        # Tab 1: Note & Media (Word / Teams inline image paper canvas)
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
         self.editor_tab.audio_files_updated.connect(self.on_audio_files_updated)
         self.tabs.addTab(self.editor_tab, "Note & Media")
@@ -136,7 +139,7 @@ class NoteGodApp(QMainWindow):
         self.floating_widget.clicked.connect(self.toggle_window)
 
         screen = QApplication.primaryScreen().geometry()
-        self.floating_widget.move(screen.width() - 100, 100)
+        self.floating_widget.move(screen.width() - 80, 100)
         self.floating_widget.show()
 
         # Load initial note
@@ -151,6 +154,45 @@ class NoteGodApp(QMainWindow):
         self.auto_save_timer = QTimer(self)
         self.auto_save_timer.timeout.connect(self.auto_save)
         self.auto_save_timer.start(5000)
+
+    def get_resize_edge(self, pos):
+        margin = 8
+        edge = Qt.Edge(0)
+        w = self.width()
+        h = self.height()
+        if pos.x() <= margin:
+            edge |= Qt.LeftEdge
+        elif pos.x() >= w - margin:
+            edge |= Qt.RightEdge
+        if pos.y() <= margin:
+            edge |= Qt.TopEdge
+        elif pos.y() >= h - margin:
+            edge |= Qt.BottomEdge
+        return edge
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            edge = self.get_resize_edge(event.pos())
+            if edge != Qt.Edge(0):
+                wh = self.windowHandle()
+                if wh and wh.startSystemResize(edge):
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        edge = self.get_resize_edge(event.pos())
+        if edge in (Qt.LeftEdge | Qt.TopEdge, Qt.RightEdge | Qt.BottomEdge):
+            self.setCursor(Qt.SizeFDiagCursor)
+        elif edge in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):
+            self.setCursor(Qt.SizeBDiagCursor)
+        elif edge in (Qt.LeftEdge, Qt.RightEdge):
+            self.setCursor(Qt.SizeHorCursor)
+        elif edge in (Qt.TopEdge, Qt.BottomEdge):
+            self.setCursor(Qt.SizeVerCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
 
     def toggle_window(self):
         if self.isVisible():

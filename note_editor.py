@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QComboBox, QColorDialog, QListView
 )
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPixmap, QIcon, QImage, QFont, QColor
+from PySide6.QtGui import QPixmap, QIcon, QImage, QFont, QColor, QTextCursor, QTextImageFormat
 
 from lightbox import ImageLightboxDialog
 from database import MEDIA_DIR
@@ -15,6 +15,7 @@ from audio_player_widget import InAppAudioPlayerWidget
 
 class NotePaperTextEdit(QTextEdit):
     image_pasted = Signal(str)
+    image_double_clicked = Signal(str)
 
     def insertFromMimeData(self, source):
         if source.hasImage():
@@ -42,6 +43,17 @@ class NotePaperTextEdit(QTextEdit):
 
         super().insertFromMimeData(source)
 
+    def mouseDoubleClickEvent(self, event):
+        cursor = self.cursorForPosition(event.pos())
+        char_fmt = cursor.charFormat()
+        if char_fmt.isImageFormat():
+            img_fmt = char_fmt.toImageFormat()
+            img_name = img_fmt.name()
+            if img_name:
+                self.image_double_clicked.emit(img_name)
+                return
+        super().mouseDoubleClickEvent(event)
+
 
 class NoteEditorWidget(QWidget):
     note_saved = Signal(dict)
@@ -64,13 +76,13 @@ class NoteEditorWidget(QWidget):
         pos_layout.setContentsMargins(8, 2, 8, 2)
         pos_layout.setSpacing(8)
 
-        pos_label = QLabel("Image Position:")
+        pos_label = QLabel("Image Placement:")
         pos_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 11px;")
         pos_layout.addWidget(pos_label)
 
-        self.radio_top = QRadioButton("Above")
-        self.radio_inline = QRadioButton("Inline")
-        self.radio_bottom = QRadioButton("Below")
+        self.radio_top = QRadioButton("Above Text")
+        self.radio_inline = QRadioButton("Inline (At Cursor)")
+        self.radio_bottom = QRadioButton("Below Text")
 
         self.radio_top.setStyleSheet("font-size: 11px;")
         self.radio_inline.setStyleSheet("font-size: 11px;")
@@ -82,16 +94,16 @@ class NoteEditorWidget(QWidget):
         self.radio_inline.toggled.connect(self.on_image_pos_changed)
         self.radio_bottom.toggled.connect(self.on_image_pos_changed)
 
-        pos_layout.addWidget(self.radio_top)
         pos_layout.addWidget(self.radio_inline)
+        pos_layout.addWidget(self.radio_top)
         pos_layout.addWidget(self.radio_bottom)
         pos_layout.addStretch()
 
-        paste_hint = QLabel("Ctrl+V to paste image")
+        paste_hint = QLabel("Ctrl+V to paste image inside note")
         paste_hint.setStyleSheet("color: #D4A373; font-size: 11px; font-weight: bold;")
         pos_layout.addWidget(paste_hint)
 
-        self.add_img_btn = QPushButton("+ Add Image")
+        self.add_img_btn = QPushButton("+ Insert Image")
         self.add_img_btn.setObjectName("SecondaryButton")
         self.add_img_btn.setCursor(Qt.PointingHandCursor)
         self.add_img_btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
@@ -162,43 +174,15 @@ class NoteEditorWidget(QWidget):
         fmt_layout.addStretch()
         self.layout.addWidget(fmt_toolbar)
 
-        # Scrollable Note Paper Canvas Container
-        self.paper_container = QWidget()
-        self.paper_layout = QVBoxLayout(self.paper_container)
-        self.paper_layout.setContentsMargins(0, 0, 0, 0)
-        self.paper_layout.setSpacing(6)
-
-        # Top Images Container
-        self.top_images_container = QWidget()
-        self.top_images_layout = QHBoxLayout(self.top_images_container)
-        self.top_images_layout.setContentsMargins(0, 0, 0, 0)
-        self.top_images_layout.setAlignment(Qt.AlignLeft)
-
-        # Clean Warm Note Paper Text Editor
+        # Single Unified Clean Warm Note Paper Text Editor (Images & Text integrated seamlessly)
         self.text_edit = NotePaperTextEdit()
         self.text_edit.setObjectName("NotePaperEdit")
-        self.text_edit.setPlaceholderText("Type note text here... Select text to apply Bold, Italic, Size, or Text Color!")
+        self.text_edit.setPlaceholderText("Type note text here... Insert or paste images directly inline, above, or below like Word / Teams! (Double click image to zoom)")
         self.text_edit.image_pasted.connect(self.on_image_pasted)
+        self.text_edit.image_double_clicked.connect(self.open_lightbox)
         self.text_edit.selectionChanged.connect(self.update_format_buttons_state)
 
-        # Bottom Images Container
-        self.bottom_images_container = QWidget()
-        self.bottom_images_layout = QHBoxLayout(self.bottom_images_container)
-        self.bottom_images_layout.setContentsMargins(0, 0, 0, 0)
-        self.bottom_images_layout.setAlignment(Qt.AlignLeft)
-
-        # Inline Images Container
-        self.inline_images_container = QWidget()
-        self.inline_images_layout = QVBoxLayout(self.inline_images_container)
-        self.inline_images_layout.setContentsMargins(0, 0, 0, 0)
-        self.inline_images_layout.setSpacing(6)
-
-        self.paper_layout.addWidget(self.top_images_container)
-        self.paper_layout.addWidget(self.text_edit, 1)
-        self.paper_layout.addWidget(self.inline_images_container)
-        self.paper_layout.addWidget(self.bottom_images_container)
-
-        self.layout.addWidget(self.paper_container, 1)
+        self.layout.addWidget(self.text_edit, 1)
 
         # In-App Audio Player Widget
         self.audio_player = InAppAudioPlayerWidget()
@@ -242,7 +226,8 @@ class NoteEditorWidget(QWidget):
 
     def load_note(self, note):
         self.current_note = note
-        self.text_edit.setHtml(note.get("content_html", note.get("content", "")))
+        html = note.get("content_html") or note.get("content", "")
+        self.text_edit.setHtml(html)
         
         pos = note.get("image_position", "inline")
         if pos == "top":
@@ -254,7 +239,6 @@ class NoteEditorWidget(QWidget):
 
         audio_files = note.get("audio_files", [])
         self.audio_player.load_audio_files(audio_files)
-        self.render_images()
 
     def get_current_data(self):
         if not self.current_note:
@@ -280,7 +264,6 @@ class NoteEditorWidget(QWidget):
                 self.current_note["image_position"] = "bottom"
             else:
                 self.current_note["image_position"] = "inline"
-            self.render_images()
 
     def upload_image(self):
         if not self.current_note:
@@ -288,175 +271,54 @@ class NoteEditorWidget(QWidget):
             return
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Image", "", "Image Files (*.png *.jpg *.jpeg *.webp *.gif *.bmp)"
+            self, "Select Image to Insert", "", "Image Files (*.png *.jpg *.jpeg *.webp *.gif *.bmp)"
         )
         if file_path:
-            self.on_image_pasted(file_path)
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(file_path)[1]
+            dest_filename = f"img_{int(time.time() * 1000)}{ext}"
+            dest_path = os.path.join(MEDIA_DIR, dest_filename)
+            shutil.copy2(file_path, dest_path)
+            self.on_image_pasted(dest_path)
 
     def on_image_pasted(self, file_path):
         if not self.current_note:
             return
-        images = self.current_note.setdefault("images", [])
-        image_obj = {
-            "path": file_path,
-            "caption": "Image (Ctrl+V)",
-            "position_tag": f"Position #{len(images)+1}"
-        }
-        images.append(image_obj)
-        self.render_images()
+
+        cursor = self.text_edit.textCursor()
+        
+        # Calculate image width to fit nicely in document
+        view_w = self.text_edit.viewport().width()
+        img_w = max(260, min(500, view_w - 40 if view_w > 100 else 400))
+
+        fmt = QTextImageFormat()
+        fmt.setName(file_path)
+        fmt.setWidth(img_w)
+
+        if self.radio_top.isChecked():
+            cursor.movePosition(QTextCursor.Start)
+            cursor.insertImage(fmt)
+            cursor.insertBlock()
+        elif self.radio_bottom.isChecked():
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertBlock()
+            cursor.insertImage(fmt)
+            cursor.insertBlock()
+        else: # Inline at cursor
+            cursor.insertImage(fmt)
+            cursor.insertBlock()
+
+        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setFocus()
+
+        self.current_note["content"] = self.text_edit.toPlainText()
+        self.current_note["content_html"] = self.text_edit.toHtml()
         self.db.add_or_update_note(self.current_note)
+        self.note_saved.emit(self.current_note)
 
-    def render_images(self):
-        for l in [self.top_images_layout, self.bottom_images_layout, self.inline_images_layout]:
-            for i in reversed(range(l.count())):
-                widget = l.itemAt(i).widget()
-                if widget:
-                    widget.setParent(None)
-
-        if not self.current_note:
-            return
-
-        raw_images = self.current_note.get("images", [])
-        pos = self.current_note.get("image_position", "inline")
-
-        images = []
-        for idx, item in enumerate(raw_images):
-            if isinstance(item, str):
-                images.append({"path": item, "caption": "Image context", "position_tag": f"Image #{idx+1}"})
-            elif isinstance(item, dict):
-                images.append(item)
-
-        if pos == "top":
-            for img in images:
-                self.top_images_layout.addWidget(self.create_image_card(img, "Above Text"))
-        elif pos == "bottom":
-            for img in images:
-                self.bottom_images_layout.addWidget(self.create_image_card(img, "Below Text"))
-        else: # Inline mode
-            for idx, img in enumerate(images):
-                pos_tag = f"Inline (Paragraph #{idx+1})"
-                self.inline_images_layout.addWidget(self.create_inline_image_strip(img, pos_tag))
-
-    def create_image_card(self, img_obj, pos_tag):
-        img_path = img_obj.get("path", "")
-        caption = img_obj.get("caption", "")
-
-        thumb_card = QFrame()
-        thumb_card.setObjectName("InlineImageCard")
-        thumb_card.setFixedWidth(160)
-        card_layout = QVBoxLayout(thumb_card)
-        card_layout.setContentsMargins(4, 4, 4, 4)
-        card_layout.setSpacing(4)
-
-        img_btn = QPushButton()
-        img_btn.setCursor(Qt.PointingHandCursor)
-        pixmap = QPixmap(img_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(140, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            img_btn.setIcon(QIcon(scaled))
-            img_btn.setIconSize(QSize(140, 90))
-        
-        img_btn.setStyleSheet("border: none; background: transparent;")
-        img_btn.clicked.connect(lambda _, path=img_path, cap=caption, tag=pos_tag: self.open_lightbox(path, cap, tag))
-        card_layout.addWidget(img_btn)
-
-        cap_input = QLineEdit()
-        cap_input.setObjectName("CaptionInput")
-        cap_input.setPlaceholderText("Caption...")
-        cap_input.setText(caption)
-        cap_input.textChanged.connect(lambda text, obj=img_obj: self.update_caption(obj, text))
-        card_layout.addWidget(cap_input)
-
-        del_btn = QPushButton("✕ Delete")
-        del_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #E2E8F0;
-                color: #B91C1C;
-                font-size: 10px;
-                padding: 2px 4px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #B91C1C;
-                color: #FFFFFF;
-            }
-        """)
-        del_btn.clicked.connect(lambda _, path=img_path: self.delete_image(path))
-        card_layout.addWidget(del_btn)
-
-        return thumb_card
-
-    def create_inline_image_strip(self, img_obj, pos_tag):
-        img_path = img_obj.get("path", "")
-        caption = img_obj.get("caption", "")
-
-        strip_card = QFrame()
-        strip_card.setObjectName("InlineImageCard")
-        strip_layout = QHBoxLayout(strip_card)
-        strip_layout.setContentsMargins(6, 4, 6, 4)
-        strip_layout.setSpacing(8)
-
-        img_btn = QPushButton()
-        img_btn.setCursor(Qt.PointingHandCursor)
-        pixmap = QPixmap(img_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(100, 70, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            img_btn.setIcon(QIcon(scaled))
-            img_btn.setIconSize(QSize(100, 70))
-        
-        img_btn.setStyleSheet("border: none; background: transparent;")
-        img_btn.clicked.connect(lambda _, path=img_path, cap=caption, tag=pos_tag: self.open_lightbox(path, cap, tag))
-        strip_layout.addWidget(img_btn)
-
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(2)
-
-        tag_label = QLabel(f"Location: {pos_tag}")
-        tag_label.setStyleSheet("color: #8B5E3C; font-weight: bold; font-size: 11px;")
-        info_layout.addWidget(tag_label)
-
-        cap_input = QLineEdit()
-        cap_input.setObjectName("CaptionInput")
-        cap_input.setPlaceholderText("Caption...")
-        cap_input.setText(caption)
-        cap_input.textChanged.connect(lambda text, obj=img_obj: self.update_caption(obj, text))
-        info_layout.addWidget(cap_input)
-
-        strip_layout.addLayout(info_layout, 1)
-
-        del_btn = QPushButton("✕ Delete")
-        del_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #E6DFD5;
-                color: #B91C1C;
-                font-size: 10px;
-                padding: 4px 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #B91C1C;
-                color: #FFFFFF;
-            }
-        """)
-        del_btn.clicked.connect(lambda _, path=img_path: self.delete_image(path))
-        strip_layout.addWidget(del_btn)
-
-        return strip_card
-
-    def update_caption(self, img_obj, new_caption):
-        img_obj["caption"] = new_caption
-
-    def open_lightbox(self, image_path, caption="", position_tag=""):
-        dlg = ImageLightboxDialog(image_path, caption, position_tag, self)
+    def open_lightbox(self, image_path):
+        dlg = ImageLightboxDialog(image_path, "Embedded Note Image", "Document Image", self)
         dlg.exec()
-
-    def delete_image(self, image_path):
-        if self.current_note and "images" in self.current_note:
-            self.current_note["images"] = [
-                img for img in self.current_note["images"] 
-                if (isinstance(img, str) and img != image_path) or (isinstance(img, dict) and img.get("path") != image_path)
-            ]
-            self.render_images()
 
     def toggle_recording(self):
         if not self.current_note:
