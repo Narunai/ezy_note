@@ -6,16 +6,16 @@ import tempfile
 import re
 import numpy as np
 
-# Try importing sounddevice & soundfile for crisp audio recording
+# Audio Recording & Processing libraries
 HAS_SOUNDDEVICE = False
 try:
     import sounddevice as sd
     import soundfile as sf
     HAS_SOUNDDEVICE = True
 except Exception as e:
-    print("sounddevice warning:", e)
+    print("sounddevice/soundfile warning:", e)
 
-# Try importing speech_recognition
+# Speech Recognition library
 HAS_SR = False
 try:
     import speech_recognition as sr
@@ -29,7 +29,7 @@ class AudioEngine:
         os.makedirs(self.media_dir, exist_ok=True)
         self.is_recording = False
         self.recorded_frames = []
-        self.sample_rate = 44100
+        self.sample_rate = 16000  # 16kHz standard optimal sample rate for Speech AI (Google/Whisper)
         self.channels = 1
         self.record_thread = None
         self.current_audio_file = None
@@ -41,7 +41,7 @@ class AudioEngine:
         self.is_recording = True
         self.recorded_frames = []
         self.start_time = time.time()
-        filename = f"rec_{int(time.time())}.wav"
+        filename = f"rec_{int(time.time() * 1000)}.wav"
         self.current_audio_file = os.path.join(self.media_dir, filename)
 
         if HAS_SOUNDDEVICE:
@@ -56,7 +56,7 @@ class AudioEngine:
                 if self.is_recording:
                     self.recorded_frames.append(indata.copy())
 
-            with sd.InputStream(samplerate=self.sample_rate, channels=self.channels, callback=callback):
+            with sd.InputStream(samplerate=self.sample_rate, channels=self.channels, dtype='float32', callback=callback):
                 while self.is_recording:
                     sd.sleep(100)
         except Exception as e:
@@ -74,6 +74,11 @@ class AudioEngine:
         if HAS_SOUNDDEVICE and self.recorded_frames:
             try:
                 audio_data = np.concatenate(self.recorded_frames, axis=0)
+                # Normalize audio peak to -1dB (0.9) to amplify quiet microphones
+                peak = np.max(np.abs(audio_data))
+                if peak > 0.01:
+                    audio_data = audio_data * (0.85 / peak)
+
                 sf.write(self.current_audio_file, audio_data, self.sample_rate, subtype='PCM_16')
             except Exception as e:
                 print("Error saving audio file:", e)
@@ -88,8 +93,8 @@ class AudioEngine:
             with wave.open(filepath, 'wb') as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
-                wf.setframerate(44100)
-                dummy_frames = bytearray(44100 * 2 * duration)
+                wf.setframerate(self.sample_rate)
+                dummy_frames = bytearray(self.sample_rate * 2 * duration)
                 wf.writeframes(dummy_frames)
         except Exception as e:
             print("Dummy wav save error:", e)
@@ -113,10 +118,10 @@ class AudioEngine:
             pass
         return 0
 
-    def transcribe_audio(self, audio_path):
+    def transcribe_audio(self, audio_path, language="th-TH"):
         """
-        Transcribes audio to text using SpeechRecognition with multilingual support (Thai & English).
-        Converts audio to compatible 16-bit PCM WAV if needed.
+        Transcribes audio to text using SpeechRecognition with multilingual support.
+        Converts any audio format (MP3, WAV, M4A, etc.) to 16-bit 16kHz PCM WAV with volume normalization.
         """
         if not os.path.exists(audio_path):
             return "(ไม่พบไฟล์เสียงที่ระบุบนดิสก์)"
@@ -124,43 +129,54 @@ class AudioEngine:
         raw_text = ""
         temp_wav_path = None
         offline_mode = False
+        duration = self.get_audio_duration(audio_path)
+        m_dur, s_dur = divmod(duration, 60)
 
         if HAS_SR:
             try:
                 wav_to_read = audio_path
-                if not audio_path.lower().endswith('.wav') and HAS_SOUNDDEVICE:
+                # Convert to clean 16kHz 16-bit mono WAV for maximum recognition accuracy
+                if HAS_SOUNDDEVICE:
                     try:
                         data, samplerate = sf.read(audio_path, dtype='float32')
+                        if len(data.shape) > 1:
+                            data = np.mean(data, axis=1)  # Convert stereo to mono
+                        
+                        # Normalize audio
+                        peak = np.max(np.abs(data))
+                        if peak > 0.01:
+                            data = data * (0.90 / peak)
+
                         temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
                         temp_wav_path = temp_file.name
                         temp_file.close()
                         sf.write(temp_wav_path, data, samplerate, subtype='PCM_16')
                         wav_to_read = temp_wav_path
-                    except Exception:
-                        pass
+                    except Exception as conv_err:
+                        print("Audio conversion notice:", conv_err)
 
                 r = sr.Recognizer()
+                r.energy_threshold = 300
+                r.dynamic_energy_threshold = True
+
                 with sr.AudioFile(wav_to_read) as source:
+                    r.adjust_for_ambient_noise(source, duration=0.3)
                     audio_data = r.record(source)
 
-                # Try Thai speech recognition
+                # Primary speech recognition attempt with selected language
                 try:
-                    raw_text = r.recognize_google(audio_data, language="th-TH")
+                    raw_text = r.recognize_google(audio_data, language=language)
                 except sr.UnknownValueError:
-                    try:
-                        raw_text = r.recognize_google(audio_data, language="en-US")
-                    except Exception:
-                        raw_text = ""
+                    # If primary language failed, do not force random language unless Auto is selected
+                    raw_text = ""
                 except Exception as net_err:
                     err_str = str(net_err).lower()
                     if "getaddrinfo" in err_str or "connection" in err_str:
                         offline_mode = True
-                    try:
-                        raw_text = r.recognize_google(audio_data, language="en-US")
-                    except Exception:
-                        raw_text = ""
-            except Exception:
-                pass
+                    raw_text = ""
+
+            except Exception as e:
+                print("Transcription error:", e)
             finally:
                 if temp_wav_path and os.path.exists(temp_wav_path):
                     try:
@@ -168,20 +184,17 @@ class AudioEngine:
                     except Exception:
                         pass
 
-        duration = self.get_audio_duration(audio_path)
-        m_dur, s_dur = divmod(duration, 60)
-
-        if raw_text:
+        if raw_text and raw_text.strip():
             lines = [
-                f"[00:00] 🎙️ เริ่มต้นช่วงเสียง (ความยาว {m_dur:02d}:{s_dur:02d})",
-                f"[00:02] 🗣️ เนื้อหาเสียง: {raw_text}",
+                f"[00:00] 🎙️ เริ่มต้นช่วงเสียง ({m_dur:02d}:{s_dur:02d})",
+                f"[00:01] 🗣️ เนื้อหาเสียง: {raw_text.strip()}",
                 f"[{m_dur:02d}:{s_dur:02d}] ⏱️ สิ้นสุดคลิปเสียง"
             ]
             return "\n".join(lines)
         elif offline_mode:
-            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ระบบกำลังทำงานในโหมดออฟไลน์ สามารถกด Retranscribe เมื่อเชื่อมต่ออินเทอร์เน็ตได้)"
+            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ระบบอยู่ในโหมดออฟไลน์ สามารถกด Retranscribe เมื่อเชื่อมต่ออินเทอร์เน็ตได้)"
         else:
-            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ตรวจไม่พบเสียงพูดที่ชัดเจนในคลิปนี้)"
+            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ตรวจไม่พบเสียงพูดที่ชัดเจน หรือเสียงเบาเกินไป สามารถกด Retranscribe ใหม่ได้)"
 
     def generate_summary(self, transcript_text):
         """
@@ -191,13 +204,12 @@ class AudioEngine:
         if not transcript_text or not transcript_text.strip():
             return "ไม่พบข้อมูลเสียงสำหรับสรุป กรุณาบันทึกเสียงหรือถอดเสียงก่อน"
 
-        # Clean text and extract dialogue / spoken content
+        # Clean text and extract spoken dialogue lines
         lines = [line.strip() for line in transcript_text.splitlines() if line.strip()]
         spoken_parts = []
         for line in lines:
-            # Filter out status headers
             cleaned = re.sub(r'\[.*?\]', '', line).strip()
-            cleaned = re.sub(r'^(🎙️|🗣️|⏱️|Speaker \w+:|ผู้พูด:)', '', cleaned).strip()
+            cleaned = re.sub(r'^(🎙️|🗣️|⏱️|เนื้อหาเสียง:|Speaker \w+:|ผู้พูด:)', '', cleaned).strip()
             if cleaned and not cleaned.startswith("บันทึกไฟล์เสียงสำเร็จ"):
                 spoken_parts.append(cleaned)
 
@@ -205,19 +217,21 @@ class AudioEngine:
 
         # Determine Topic & Context
         topic = "บันทึกการประชุมและการสนทนาทั่วไป"
-        if "รูป" in full_speech or "ภาพ" in full_speech or "ขนาด" in full_speech or "มุม" in full_speech:
+        full_lower = full_speech.lower()
+
+        if any(k in full_speech for k in ["รูป", "ภาพ", "ขนาด", "มุม", "ขยาย", "ปรับ"]):
             topic = "การจัดการรูปภาพและการปรับขนาดในเอกสารโน้ต"
-        elif "ออกแบบ" in full_speech or "gui" in full_speech.lower() or "หน้าจอ" in full_speech:
+        elif any(k in full_speech for k in ["ออกแบบ", "หน้าจอ", "แท็บ", "ปุ่ม", "widget"]) or "gui" in full_lower:
             topic = "การออกแบบโครงสร้างส่วนติดต่อผู้ใช้ (UI/UX) และระบบหน้าจอ"
-        elif "เสียง" in full_speech or "ถอดเสียง" in full_speech or "ประชุม" in full_speech:
+        elif any(k in full_speech for k in ["เสียง", "ถอดเสียง", "อัดเสียง", "ไมค์", "บันทึก"]):
             topic = "การประชุมหารือและระบบบันทึกถอดเสียงอัตโนมัติ"
-        elif "งาน" in full_speech or "รายการ" in full_speech or "todo" in full_speech.lower():
+        elif any(k in full_speech for k in ["งาน", "รายการ", "ตรวจ", "เช็ค"]) or "todo" in full_lower:
             topic = "การวางแผนและติดตามรายการงานที่ต้องดำเนินการ"
 
         key_points = []
         if spoken_parts:
-            for part in spoken_parts[:5]:
-                if len(part) > 10:
+            for part in spoken_parts[:6]:
+                if len(part) >= 3:
                     key_points.append(f"- {part}")
         if not key_points:
             key_points.append("- บันทึกเสียงและจัดเก็บไฟล์เสียงลงในฐานข้อมูลเครื่องอย่างสมบูรณ์")
