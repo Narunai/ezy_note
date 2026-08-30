@@ -50,6 +50,21 @@ class NoteGodApp(QMainWindow):
         self.audio_engine = AudioEngine(MEDIA_DIR)
         self.current_note = None
 
+        # Restore saved window position & size from previous session
+        saved_geo = self.db.get_window_geometry()
+        if saved_geo:
+            gx = saved_geo.get("x", 100)
+            gy = saved_geo.get("y", 100)
+            gw = saved_geo.get("w", 1020)
+            gh = saved_geo.get("h", 680)
+            self.move(gx, gy)
+            self.resize(gw, gh)
+            self.saved_pos = QPoint(gx, gy)
+            self.saved_size = self.size()
+        else:
+            self.saved_pos = self.pos()
+            self.saved_size = self.size()
+
         # Apply stylesheet
         self.setStyleSheet(QSS_STYLE)
 
@@ -137,9 +152,10 @@ class NoteGodApp(QMainWindow):
         # 3 Dedicated Tabs Widget
         self.tabs = QTabWidget()
 
-        # Tab 0: 📝 Notepad (Pure, distraction-free Notepad workspace)
+        # Tab 0: 📝 Notepad (Distraction-free, visible formatting bar, direct voice record)
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
         self.editor_tab.switch_to_voice_requested.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.editor_tab.audio_files_updated.connect(self.on_audio_files_updated)
         self.tabs.addTab(self.editor_tab, "📝 Notepad")
 
         # Tab 1: 🎙️ Voice Studio (Dedicated Studio for Audio Recording & Multi-Track Playback)
@@ -239,22 +255,33 @@ class NoteGodApp(QMainWindow):
 
     def toggle_window(self):
         if self.isVisible():
+            # Remember exact desktop position and size
+            self.saved_pos = self.pos()
+            self.saved_size = self.size()
+            self.db.save_window_geometry({
+                "x": self.saved_pos.x(),
+                "y": self.saved_pos.y(),
+                "w": self.saved_size.width(),
+                "h": self.saved_size.height()
+            })
             self.hide()
         else:
+            if hasattr(self, 'saved_pos') and self.saved_pos:
+                self.move(self.saved_pos)
+            if hasattr(self, 'saved_size') and self.saved_size:
+                self.resize(self.saved_size)
             self.show()
             self.activateWindow()
+            self.raise_()
 
     def on_tab_changed(self, index):
         if not self.current_note:
             return
         if index == 0:
-            # Switched to Note Paper
             self.editor_tab.load_note(self.current_note)
         elif index == 1:
-            # Switched to Voice Studio
             self.voice_tab.load_note(self.current_note)
         elif index == 2:
-            # Switched to Transcript & AI Summary
             self.transcript_tab.load_note(self.current_note)
 
     def on_audio_files_updated(self, note):
@@ -371,6 +398,12 @@ class NoteGodApp(QMainWindow):
 
     def closeEvent(self, event):
         self.save_current_note()
+        self.db.save_window_geometry({
+            "x": self.x(),
+            "y": self.y(),
+            "w": self.width(),
+            "h": self.height()
+        })
         event.accept()
 
 def main():

@@ -23,7 +23,6 @@ class NotePaperTextEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptRichText(True)
-        # Enable standard Notepad keyboard shortcuts
         self.setup_shortcuts()
 
     def setup_shortcuts(self):
@@ -135,7 +134,6 @@ class NotePaperTextEdit(QTextEdit):
             del_act = menu.addAction("🗑️ Delete Image (ลบรูปภาพนี้)")
             del_act.triggered.connect(lambda: self.delete_image_at_cursor(cursor))
         else:
-            # Standard Notepad Edit Options
             undo_act = menu.addAction("Undo (Ctrl+Z)")
             undo_act.triggered.connect(self.undo)
             undo_act.setEnabled(self.document().isUndoAvailable())
@@ -195,13 +193,14 @@ class NoteEditorWidget(QWidget):
         self.layout.setContentsMargins(6, 4, 6, 4)
         self.layout.setSpacing(4)
 
-        # 1. Sleek Optional Format Toolbar (Hidden by default for true Notepad minimalism)
+        # 1. Sleek Single-Line Format & Tool Bar (Always visible, clean 28px)
         self.toolbar_frame = QFrame()
         self.toolbar_frame.setObjectName("FormatToolbar")
         tb_layout = QHBoxLayout(self.toolbar_frame)
         tb_layout.setContentsMargins(6, 2, 6, 2)
-        tb_layout.setSpacing(5)
+        tb_layout.setSpacing(6)
 
+        # Text Style buttons
         self.btn_bold = QPushButton("B")
         self.btn_bold.setCheckable(True)
         self.btn_bold.setFixedSize(24, 22)
@@ -239,17 +238,20 @@ class NoteEditorWidget(QWidget):
         self.size_combo.currentIndexChanged.connect(self.on_size_changed)
         tb_layout.addWidget(self.size_combo)
 
-        self.btn_color = QPushButton("Color")
+        self.btn_color = QPushButton("🎨 Color")
         self.btn_color.setObjectName("SecondaryButton")
-        self.btn_color.setStyleSheet("font-size: 11px; padding: 2px 6px; font-weight: bold;")
+        self.btn_color.setCursor(Qt.PointingHandCursor)
+        self.btn_color.setStyleSheet("font-size: 11px; padding: 2px 8px; font-weight: bold;")
         self.btn_color.setToolTip("Choose Text Color")
         self.btn_color.clicked.connect(self.choose_text_color)
         tb_layout.addWidget(self.btn_color)
 
+        # Divider
         div1 = QLabel("|")
-        div1.setStyleSheet("color: #332E28; font-size: 12px; margin: 0 4px;")
+        div1.setStyleSheet("color: #332E28; font-size: 12px; margin: 0 2px;")
         tb_layout.addWidget(div1)
 
+        # Image Insert Tools
         self.img_size_combo = QComboBox()
         self.img_size_combo.setView(QListView())
         self.img_size_combo.setStyleSheet("min-width: 85px; font-size: 11px;")
@@ -262,25 +264,36 @@ class NoteEditorWidget(QWidget):
         self.add_img_btn = QPushButton("📷 + Image")
         self.add_img_btn.setObjectName("SecondaryButton")
         self.add_img_btn.setCursor(Qt.PointingHandCursor)
-        self.add_img_btn.setStyleSheet("padding: 2px 6px; font-size: 11px;")
-        self.add_img_btn.setToolTip("Insert image into note")
+        self.add_img_btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.add_img_btn.setToolTip("Insert image into note (or paste Ctrl+V)")
         self.add_img_btn.clicked.connect(self.upload_image)
         tb_layout.addWidget(self.add_img_btn)
 
         tb_layout.addStretch()
 
-        close_tb_btn = QPushButton("✕")
-        close_tb_btn.setObjectName("SecondaryButton")
-        close_tb_btn.setFixedSize(20, 20)
-        close_tb_btn.setStyleSheet("font-size: 10px; padding: 0px;")
-        close_tb_btn.setToolTip("Hide toolbar")
-        close_tb_btn.clicked.connect(lambda: self.toolbar_frame.hide())
-        tb_layout.addWidget(close_tb_btn)
+        # 1-Click Direct Record Voice Button
+        self.rec_btn = QPushButton("🎙️ Record Voice")
+        self.rec_btn.setCursor(Qt.PointingHandCursor)
+        self.rec_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #B91C1C;
+                color: #FFFFFF;
+                font-weight: bold;
+                font-size: 11px;
+                padding: 3px 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #DC2626;
+            }
+        """)
+        self.rec_btn.setToolTip("Click to Record Voice directly in this note")
+        self.rec_btn.clicked.connect(self.toggle_recording)
+        tb_layout.addWidget(self.rec_btn)
 
-        self.toolbar_frame.hide()  # Hidden by default for clean Notepad feel
         self.layout.addWidget(self.toolbar_frame)
 
-        # 2. Notepad Paper Canvas (Fills entire height smoothly)
+        # 2. Notepad Paper Canvas (Clean, spacious, full height)
         self.text_edit = NotePaperTextEdit()
         self.text_edit.setObjectName("NotePaperEdit")
         self.text_edit.setPlaceholderText("Start typing your note here... (Paste Ctrl+V to add images)")
@@ -292,7 +305,7 @@ class NoteEditorWidget(QWidget):
 
         self.layout.addWidget(self.text_edit, 1)
 
-        # 3. Minimalist Notepad Status Bar at Bottom (Slim, Non-intrusive)
+        # 3. Minimalist Notepad Status Bar at Bottom
         status_bar = QFrame()
         status_bar.setStyleSheet("background-color: transparent; padding: 0px 4px;")
         sb_layout = QHBoxLayout(status_bar)
@@ -305,29 +318,15 @@ class NoteEditorWidget(QWidget):
 
         sb_layout.addStretch()
 
-        self.tool_toggle_btn = QPushButton("🛠️ Tools")
-        self.tool_toggle_btn.setObjectName("SecondaryButton")
-        self.tool_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.tool_toggle_btn.setStyleSheet("font-size: 10px; padding: 1px 6px;")
-        self.tool_toggle_btn.setToolTip("Toggle Text Formatting & Image Bar")
-        self.tool_toggle_btn.clicked.connect(self.toggle_toolbar)
-        sb_layout.addWidget(self.tool_toggle_btn)
-
-        self.quick_mic_btn = QPushButton("🎙️ Voice")
-        self.quick_mic_btn.setObjectName("SecondaryButton")
-        self.quick_mic_btn.setCursor(Qt.PointingHandCursor)
-        self.quick_mic_btn.setStyleSheet("font-size: 10px; padding: 1px 6px; color: #F59E0B;")
-        self.quick_mic_btn.setToolTip("Switch to Voice Studio")
-        self.quick_mic_btn.clicked.connect(self.switch_to_voice_requested.emit)
-        sb_layout.addWidget(self.quick_mic_btn)
+        self.quick_studio_btn = QPushButton("🎙️ Voice Studio Tab")
+        self.quick_studio_btn.setObjectName("SecondaryButton")
+        self.quick_studio_btn.setCursor(Qt.PointingHandCursor)
+        self.quick_studio_btn.setStyleSheet("font-size: 10px; padding: 1px 6px; color: #F59E0B;")
+        self.quick_studio_btn.setToolTip("Open Voice & Audio Studio Tab")
+        self.quick_studio_btn.clicked.connect(self.switch_to_voice_requested.emit)
+        sb_layout.addWidget(self.quick_studio_btn)
 
         self.layout.addWidget(status_bar)
-
-    def toggle_toolbar(self):
-        if self.toolbar_frame.isVisible():
-            self.toolbar_frame.hide()
-        else:
-            self.toolbar_frame.show()
 
     def update_status_bar(self):
         cursor = self.text_edit.textCursor()
@@ -418,3 +417,35 @@ class NoteEditorWidget(QWidget):
         if cursor is not None:
             dlg.size_selected.connect(lambda w: self.text_edit.resize_image_at_cursor(cursor, w))
         dlg.exec()
+
+    def toggle_recording(self):
+        if not self.current_note:
+            QMessageBox.warning(self, "Warning", "Select or create a note before recording audio.")
+            return
+
+        if not self.audio_engine.is_recording:
+            self.audio_engine.start_recording()
+            self.rec_btn.setText("🔴 Recording... (Stop)")
+            self.rec_btn.setStyleSheet("background-color: #DC2626; color: #FFFFFF; font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 4px;")
+        else:
+            path, duration = self.audio_engine.stop_recording()
+            self.rec_btn.setText("🎙️ Record Voice")
+            self.rec_btn.setStyleSheet("background-color: #B91C1C; color: #FFFFFF; font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 4px;")
+            
+            audio_files = self.current_note.setdefault("audio_files", [])
+            track_name = f"Voice #{len(audio_files)+1}"
+            new_clip = {
+                "path": path,
+                "duration": duration,
+                "name": track_name
+            }
+            audio_files.append(new_clip)
+
+            transcript = self.audio_engine.transcribe_audio(path)
+            summary = self.audio_engine.generate_summary(transcript)
+            existing_tr = self.current_note.get("transcript", "")
+            self.current_note["transcript"] = (existing_tr + "\n\n" + f"[{track_name}]\n" + transcript).strip()
+            self.current_note["summary"] = summary
+
+            self.db.add_or_update_note(self.current_note)
+            self.audio_files_updated.emit(self.current_note)

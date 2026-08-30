@@ -36,6 +36,24 @@ class NoteDatabase:
         except Exception as e:
             print("Error saving notes:", e)
 
+    def get_window_geometry(self):
+        settings_file = os.path.join(DATA_DIR, "settings.json")
+        if os.path.exists(settings_file):
+            try:
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return None
+
+    def save_window_geometry(self, geo):
+        settings_file = os.path.join(DATA_DIR, "settings.json")
+        try:
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(geo, f)
+        except Exception:
+            pass
+
     def get_all_notes(self):
         return sorted(self.notes, key=lambda x: x.get("updated_at", 0), reverse=True)
 
