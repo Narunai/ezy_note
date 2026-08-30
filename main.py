@@ -119,12 +119,12 @@ class NoteGodApp(QMainWindow):
         # Tabs Widget (Tab 1: Note & Media, Tab 2: Transcript & Summary)
         self.tabs = QTabWidget()
 
-        # Tab 1: Note & Media (Word / Teams inline image paper canvas)
+        # Tab 1: Note & Media (Word / Teams inline image paper canvas with interactive resizing)
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
         self.editor_tab.audio_files_updated.connect(self.on_audio_files_updated)
         self.tabs.addTab(self.editor_tab, "Note & Media")
 
-        # Tab 2: Transcript & Summary
+        # Tab 2: Transcript & Summary (AI Summary & Topic Extraction)
         self.transcript_tab = TranscriptViewWidget(self.audio_engine, self.db)
         self.transcript_tab.transcript_updated.connect(self.on_transcript_updated)
         self.tabs.addTab(self.transcript_tab, "Transcript & AI Summary")
@@ -172,7 +172,8 @@ class NoteGodApp(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            edge = self.get_resize_edge(event.pos())
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            edge = self.get_resize_edge(pos)
             if edge != Qt.Edge(0):
                 wh = self.windowHandle()
                 if wh and wh.startSystemResize(edge):
@@ -181,7 +182,8 @@ class NoteGodApp(QMainWindow):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        edge = self.get_resize_edge(event.pos())
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        edge = self.get_resize_edge(pos)
         if edge in (Qt.LeftEdge | Qt.TopEdge, Qt.RightEdge | Qt.BottomEdge):
             self.setCursor(Qt.SizeFDiagCursor)
         elif edge in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):

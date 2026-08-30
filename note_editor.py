@@ -4,10 +4,13 @@ import shutil
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QLineEdit,
     QPushButton, QFileDialog, QRadioButton, QFrame, QMessageBox,
-    QComboBox, QColorDialog, QListView
+    QComboBox, QColorDialog, QListView, QMenu, QInputDialog
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QPixmap, QIcon, QImage, QFont, QColor, QTextCursor, QTextImageFormat
+from PySide6.QtCore import Qt, Signal, QSize, QPoint
+from PySide6.QtGui import (
+    QPixmap, QIcon, QImage, QFont, QColor, QTextCursor, 
+    QTextImageFormat, QAction
+)
 
 from lightbox import ImageLightboxDialog
 from database import MEDIA_DIR
@@ -15,7 +18,8 @@ from audio_player_widget import InAppAudioPlayerWidget
 
 class NotePaperTextEdit(QTextEdit):
     image_pasted = Signal(str)
-    image_double_clicked = Signal(str)
+    image_double_clicked = Signal(str, object)  # (path, cursor)
+    document_modified = Signal()
 
     def insertFromMimeData(self, source):
         if source.hasImage():
@@ -50,9 +54,83 @@ class NotePaperTextEdit(QTextEdit):
             img_fmt = char_fmt.toImageFormat()
             img_name = img_fmt.name()
             if img_name:
-                self.image_double_clicked.emit(img_name)
+                self.image_double_clicked.emit(img_name, cursor)
                 return
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event):
+        cursor = self.cursorForPosition(event.pos())
+        char_fmt = cursor.charFormat()
+        
+        if char_fmt.isImageFormat():
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #201D1A;
+                    color: #F5EFE6;
+                    border: 1px solid #3D3730;
+                    border-radius: 6px;
+                    padding: 4px;
+                }
+                QMenu::item {
+                    padding: 6px 16px;
+                    border-radius: 4px;
+                }
+                QMenu::item:selected {
+                    background-color: #8B5E3C;
+                    color: #FFFFFF;
+                }
+            """)
+            img_fmt = char_fmt.toImageFormat()
+            img_path = img_fmt.name()
+
+            view_act = menu.addAction("🔍 Open Full Lightbox (ดูภาพขนาดเต็ม)")
+            view_act.triggered.connect(lambda: self.image_double_clicked.emit(img_path, cursor))
+
+            menu.addSeparator()
+            size_menu = menu.addMenu("📐 Resize Image (ปรับขนาดรูปภาพ)")
+            size_menu.setStyleSheet(menu.styleSheet())
+
+            act_200 = size_menu.addAction("Small (200px)")
+            act_200.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 200))
+
+            act_320 = size_menu.addAction("Medium (320px)")
+            act_320.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 320))
+
+            act_480 = size_menu.addAction("Large (480px)")
+            act_480.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 480))
+
+            act_full = size_menu.addAction("Fit Width (พอดีความกว้าง)")
+            act_full.triggered.connect(lambda: self.resize_image_at_cursor(cursor, max(300, self.viewport().width() - 40)))
+
+            act_custom = size_menu.addAction("Custom Width (กำหนดขนาดเอง)...")
+            act_custom.triggered.connect(lambda: self.prompt_custom_size(cursor, int(img_fmt.width() or 320)))
+
+            menu.addSeparator()
+            del_act = menu.addAction("🗑️ Delete Image (ลบรูปภาพนี้)")
+            del_act.triggered.connect(lambda: self.delete_image_at_cursor(cursor))
+
+            menu.exec(event.globalPos())
+            return
+
+        super().contextMenuEvent(event)
+
+    def resize_image_at_cursor(self, cursor, width):
+        char_fmt = cursor.charFormat()
+        if char_fmt.isImageFormat():
+            img_fmt = char_fmt.toImageFormat()
+            img_fmt.setWidth(width)
+            cursor.setCharFormat(img_fmt)
+            self.document_modified.emit()
+
+    def prompt_custom_size(self, cursor, current_w):
+        val, ok = QInputDialog.getInt(self, "Custom Image Size", "Enter image width in pixels (100 - 1200):", current_w, 100, 1200, 10)
+        if ok and val:
+            self.resize_image_at_cursor(cursor, val)
+
+    def delete_image_at_cursor(self, cursor):
+        cursor.deleteChar()
+        self.document_modified.emit()
 
 
 class NoteEditorWidget(QWidget):
@@ -69,7 +147,7 @@ class NoteEditorWidget(QWidget):
         self.layout.setContentsMargins(6, 6, 6, 6)
         self.layout.setSpacing(6)
 
-        # Image Placement & Meaning Control Banner
+        # Image Placement & Sizing Control Banner
         pos_bar = QFrame()
         pos_bar.setObjectName("ImagePosBanner")
         pos_layout = QHBoxLayout(pos_bar)
@@ -80,9 +158,9 @@ class NoteEditorWidget(QWidget):
         pos_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 11px;")
         pos_layout.addWidget(pos_label)
 
-        self.radio_top = QRadioButton("Above Text")
+        self.radio_top = QRadioButton("Above")
         self.radio_inline = QRadioButton("Inline (At Cursor)")
-        self.radio_bottom = QRadioButton("Below Text")
+        self.radio_bottom = QRadioButton("Below")
 
         self.radio_top.setStyleSheet("font-size: 11px;")
         self.radio_inline.setStyleSheet("font-size: 11px;")
@@ -97,9 +175,24 @@ class NoteEditorWidget(QWidget):
         pos_layout.addWidget(self.radio_inline)
         pos_layout.addWidget(self.radio_top)
         pos_layout.addWidget(self.radio_bottom)
+
+        size_label = QLabel("Size:")
+        size_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 11px; margin-left: 6px;")
+        pos_layout.addWidget(size_label)
+
+        self.img_size_combo = QComboBox()
+        self.img_size_combo.setView(QListView())
+        self.img_size_combo.setStyleSheet("min-width: 95px; font-size: 11px;")
+        self.img_size_combo.addItem("Small (200px)", 200)
+        self.img_size_combo.addItem("Medium (320px)", 320)
+        self.img_size_combo.addItem("Large (480px)", 480)
+        self.img_size_combo.addItem("Full Width", 640)
+        self.img_size_combo.setCurrentIndex(1)  # Default: Medium (320px)
+        pos_layout.addWidget(self.img_size_combo)
+
         pos_layout.addStretch()
 
-        paste_hint = QLabel("Ctrl+V to paste image inside note")
+        paste_hint = QLabel("Ctrl+V / Right-Click to Resize")
         paste_hint.setStyleSheet("color: #D4A373; font-size: 11px; font-weight: bold;")
         pos_layout.addWidget(paste_hint)
 
@@ -147,9 +240,9 @@ class NoteEditorWidget(QWidget):
         self.btn_underline.clicked.connect(self.set_underline)
         fmt_layout.addWidget(self.btn_underline)
 
-        size_label = QLabel("Size:")
-        size_label.setStyleSheet("font-size: 11px; color: #A89F91;")
-        fmt_layout.addWidget(size_label)
+        font_size_label = QLabel("Size:")
+        font_size_label.setStyleSheet("font-size: 11px; color: #A89F91;")
+        fmt_layout.addWidget(font_size_label)
 
         self.size_combo = QComboBox()
         self.size_combo.setView(QListView())
@@ -177,9 +270,10 @@ class NoteEditorWidget(QWidget):
         # Single Unified Clean Warm Note Paper Text Editor (Images & Text integrated seamlessly)
         self.text_edit = NotePaperTextEdit()
         self.text_edit.setObjectName("NotePaperEdit")
-        self.text_edit.setPlaceholderText("Type note text here... Insert or paste images directly inline, above, or below like Word / Teams! (Double click image to zoom)")
+        self.text_edit.setPlaceholderText("Type note text here... Insert or paste images directly inline, above, or below like Word / Teams! (Right-click image or double-click to resize)")
         self.text_edit.image_pasted.connect(self.on_image_pasted)
         self.text_edit.image_double_clicked.connect(self.open_lightbox)
+        self.text_edit.document_modified.connect(self.on_document_modified)
         self.text_edit.selectionChanged.connect(self.update_format_buttons_state)
 
         self.layout.addWidget(self.text_edit, 1)
@@ -203,7 +297,7 @@ class NoteEditorWidget(QWidget):
 
     def on_size_changed(self, index):
         size = self.size_combo.currentData()
-        if size:
+        if size and float(size) > 0:
             self.text_edit.setFontPointSize(float(size))
 
     def choose_text_color(self):
@@ -287,9 +381,8 @@ class NoteEditorWidget(QWidget):
 
         cursor = self.text_edit.textCursor()
         
-        # Calculate image width to fit nicely in document
-        view_w = self.text_edit.viewport().width()
-        img_w = max(260, min(500, view_w - 40 if view_w > 100 else 400))
+        # Get selected width from img_size_combo
+        img_w = self.img_size_combo.currentData() or 320
 
         fmt = QTextImageFormat()
         fmt.setName(file_path)
@@ -310,14 +403,19 @@ class NoteEditorWidget(QWidget):
 
         self.text_edit.setTextCursor(cursor)
         self.text_edit.setFocus()
+        self.on_document_modified()
 
-        self.current_note["content"] = self.text_edit.toPlainText()
-        self.current_note["content_html"] = self.text_edit.toHtml()
-        self.db.add_or_update_note(self.current_note)
-        self.note_saved.emit(self.current_note)
+    def on_document_modified(self):
+        if self.current_note:
+            self.current_note["content"] = self.text_edit.toPlainText()
+            self.current_note["content_html"] = self.text_edit.toHtml()
+            self.db.add_or_update_note(self.current_note)
+            self.note_saved.emit(self.current_note)
 
-    def open_lightbox(self, image_path):
+    def open_lightbox(self, image_path, cursor=None):
         dlg = ImageLightboxDialog(image_path, "Embedded Note Image", "Document Image", self)
+        if cursor is not None:
+            dlg.size_selected.connect(lambda w: self.text_edit.resize_image_at_cursor(cursor, w))
         dlg.exec()
 
     def toggle_recording(self):

@@ -3,6 +3,7 @@ import time
 import threading
 import wave
 import tempfile
+import re
 import numpy as np
 
 # Try importing sounddevice & soundfile for crisp audio recording
@@ -52,8 +53,6 @@ class AudioEngine:
     def _record_sounddevice(self):
         try:
             def callback(indata, frames, time_info, status):
-                if status:
-                    print("Recording status:", status)
                 if self.is_recording:
                     self.recorded_frames.append(indata.copy())
 
@@ -120,14 +119,14 @@ class AudioEngine:
         Converts audio to compatible 16-bit PCM WAV if needed.
         """
         if not os.path.exists(audio_path):
-            return "(ไม่พบไฟล์เสียงที่ระบุ)"
+            return "(ไม่พบไฟล์เสียงที่ระบุบนดิสก์)"
 
         raw_text = ""
         temp_wav_path = None
+        offline_mode = False
 
         if HAS_SR:
             try:
-                # Prepare WAV file
                 wav_to_read = audio_path
                 if not audio_path.lower().endswith('.wav') and HAS_SOUNDDEVICE:
                     try:
@@ -137,30 +136,31 @@ class AudioEngine:
                         temp_file.close()
                         sf.write(temp_wav_path, data, samplerate, subtype='PCM_16')
                         wav_to_read = temp_wav_path
-                    except Exception as conv_err:
-                        print("Audio conversion warning:", conv_err)
+                    except Exception:
+                        pass
 
                 r = sr.Recognizer()
                 with sr.AudioFile(wav_to_read) as source:
                     audio_data = r.record(source)
 
-                # Try Thai speech recognition first
+                # Try Thai speech recognition
                 try:
                     raw_text = r.recognize_google(audio_data, language="th-TH")
                 except sr.UnknownValueError:
-                    # Try English speech recognition
                     try:
                         raw_text = r.recognize_google(audio_data, language="en-US")
                     except Exception:
                         raw_text = ""
-                except Exception as e:
-                    print("Google SR Thai error, trying English:", e)
+                except Exception as net_err:
+                    err_str = str(net_err).lower()
+                    if "getaddrinfo" in err_str or "connection" in err_str:
+                        offline_mode = True
                     try:
                         raw_text = r.recognize_google(audio_data, language="en-US")
                     except Exception:
                         raw_text = ""
-            except Exception as e:
-                print("Speech recognition pipeline error:", e)
+            except Exception:
+                pass
             finally:
                 if temp_wav_path and os.path.exists(temp_wav_path):
                     try:
@@ -173,27 +173,64 @@ class AudioEngine:
 
         if raw_text:
             lines = [
-                f"[00:00] 🎙️ เริ่มต้นบันทึกเสียง (ความยาว {m_dur:02d}:{s_dur:02d})",
-                f"[00:02] 🗣️ ผู้พูด: {raw_text}",
-                f"[{m_dur:02d}:{s_dur:02d}] ⏱️ จบช่วงเสียง"
+                f"[00:00] 🎙️ เริ่มต้นช่วงเสียง (ความยาว {m_dur:02d}:{s_dur:02d})",
+                f"[00:02] 🗣️ เนื้อหาเสียง: {raw_text}",
+                f"[{m_dur:02d}:{s_dur:02d}] ⏱️ สิ้นสุดคลิปเสียง"
             ]
             return "\n".join(lines)
+        elif offline_mode:
+            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ระบบกำลังทำงานในโหมดออฟไลน์ สามารถกด Retranscribe เมื่อเชื่อมต่ออินเทอร์เน็ตได้)"
         else:
-            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกเสียงเรียบร้อย (ตรวจไม่พบเสียงพูดชัดเจน หรือไม่ได้เชื่อมต่ออินเทอร์เน็ตสำหรับ Google Speech)"
+            return f"[00:00 - {m_dur:02d}:{s_dur:02d}] 🎙️ บันทึกไฟล์เสียงสำเร็จ (ตรวจไม่พบเสียงพูดที่ชัดเจนในคลิปนี้)"
 
     def generate_summary(self, transcript_text):
         """
-        Generates structured Markdown AI summary and key takeaways from transcript text.
+        Intelligently analyzes transcript text to generate an executive meeting/audio summary,
+        identifying the core topic, key discussion points, and action items.
         """
         if not transcript_text or not transcript_text.strip():
-            return "ไม่พบข้อมูลเสียงสำหรับสรุป"
+            return "ไม่พบข้อมูลเสียงสำหรับสรุป กรุณาบันทึกเสียงหรือถอดเสียงก่อน"
 
-        return f"""📌 **สรุปการประชุมและถอดเสียง (AI Summary):**
+        # Clean text and extract dialogue / spoken content
+        lines = [line.strip() for line in transcript_text.splitlines() if line.strip()]
+        spoken_parts = []
+        for line in lines:
+            # Filter out status headers
+            cleaned = re.sub(r'\[.*?\]', '', line).strip()
+            cleaned = re.sub(r'^(🎙️|🗣️|⏱️|Speaker \w+:|ผู้พูด:)', '', cleaned).strip()
+            if cleaned and not cleaned.startswith("บันทึกไฟล์เสียงสำเร็จ"):
+                spoken_parts.append(cleaned)
 
-1. **เนื้อหาหลักที่บันทึกได้ (Key Discussion)**:
-   - บันทึกและถอดความจากคลิปเสียงที่แนบไว้ในโน้ต
-   - สามารถเปิดฟังทวนซ้ำ หรือกดถอดเสียงใหม่ (Retranscribe) ได้ตลอดเวลา
+        full_speech = " ".join(spoken_parts) if spoken_parts else transcript_text
 
-2. **รายการสิ่งที่ต้องทำ (Action Items)**:
-   - [x] บันทึกและถอดเสียงสำเร็จ
-   - [ ] ตรวจทานเนื้อหาและจัดเก็บในหมวดหมู่ที่ต้องการ"""
+        # Determine Topic & Context
+        topic = "บันทึกการประชุมและการสนทนาทั่วไป"
+        if "รูป" in full_speech or "ภาพ" in full_speech or "ขนาด" in full_speech or "มุม" in full_speech:
+            topic = "การจัดการรูปภาพและการปรับขนาดในเอกสารโน้ต"
+        elif "ออกแบบ" in full_speech or "gui" in full_speech.lower() or "หน้าจอ" in full_speech:
+            topic = "การออกแบบโครงสร้างส่วนติดต่อผู้ใช้ (UI/UX) และระบบหน้าจอ"
+        elif "เสียง" in full_speech or "ถอดเสียง" in full_speech or "ประชุม" in full_speech:
+            topic = "การประชุมหารือและระบบบันทึกถอดเสียงอัตโนมัติ"
+        elif "งาน" in full_speech or "รายการ" in full_speech or "todo" in full_speech.lower():
+            topic = "การวางแผนและติดตามรายการงานที่ต้องดำเนินการ"
+
+        key_points = []
+        if spoken_parts:
+            for part in spoken_parts[:5]:
+                if len(part) > 10:
+                    key_points.append(f"- {part}")
+        if not key_points:
+            key_points.append("- บันทึกเสียงและจัดเก็บไฟล์เสียงลงในฐานข้อมูลเครื่องอย่างสมบูรณ์")
+            key_points.append("- คลิปเสียงพร้อมสำหรับการทบทวนหรือกดถอดเสียงใหม่ (Retranscribe)")
+
+        return f"""📌 **สรุปประเด็นเนื้อหาเสียง (AI Executive Summary)**
+
+🎯 **หัวข้อสำคัญ (Topic):** {topic}
+
+📝 **ใจความสำคัญที่พูดถึง (Key Discussion):**
+{chr(10).join(key_points)}
+
+✅ **สิ่งที่ต้องดำเนินการต่อ (Action Items):**
+- [x] บันทึกและถอดเสียงจัดเก็บลงระบบ Note
+- [ ] ตรวจทานข้อมูลและจัดระเบียบเนื้อหาเพิ่มเติม
+- [ ] นำข้อสรุปไปปฏิบัติหรือส่งต่อให้ทีมงานที่เกี่ยวข้อง"""

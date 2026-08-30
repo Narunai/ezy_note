@@ -95,19 +95,35 @@ class TranscriptViewWidget(QWidget):
         tr_layout.addWidget(self.transcript_edit)
         splitter.addWidget(transcript_container)
 
-        # 2. AI Summary box (High-Contrast Text)
+        # 2. AI Summary box (High-Contrast Text) with Dedicated Summarize Button
         summary_container = QWidget()
         sum_layout = QVBoxLayout(summary_container)
         sum_layout.setContentsMargins(0, 0, 0, 0)
         sum_layout.setSpacing(6)
 
+        sum_header = QHBoxLayout()
         sum_label = QLabel("AI Meeting Summary & Action Items:")
         sum_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 12px;")
-        sum_layout.addWidget(sum_label)
+        sum_header.addWidget(sum_label)
+        sum_header.addStretch()
+
+        self.summarize_btn = QPushButton("🤖 สรุปเนื้อหาเสียง (Summarize with AI)")
+        self.summarize_btn.setCursor(Qt.PointingHandCursor)
+        self.summarize_btn.setStyleSheet("background-color: #D97706; color: #FFFFFF; font-weight: bold; font-size: 11px; padding: 4px 12px;")
+        self.summarize_btn.setToolTip("กดเพื่อวิเคราะห์และสรุปประเด็นสำคัญว่าเสียงนี้เกี่ยวกับอะไร")
+        self.summarize_btn.clicked.connect(self.generate_ai_summary)
+        sum_header.addWidget(self.summarize_btn)
+
+        copy_sum_btn = QPushButton("Copy Summary")
+        copy_sum_btn.setObjectName("SecondaryButton")
+        copy_sum_btn.clicked.connect(self.copy_summary)
+        sum_header.addWidget(copy_sum_btn)
+
+        sum_layout.addLayout(sum_header)
 
         self.summary_edit = QTextEdit()
         self.summary_edit.setObjectName("TranscriptTextEdit")
-        self.summary_edit.setPlaceholderText("AI generated summary and action items will appear here...")
+        self.summary_edit.setPlaceholderText("AI generated summary and action items will appear here... Click '🤖 สรุปเนื้อหาเสียง' to summarize anytime!")
         sum_layout.addWidget(self.summary_edit)
         splitter.addWidget(summary_container)
 
@@ -152,6 +168,32 @@ class TranscriptViewWidget(QWidget):
             self.current_note["transcript"] = self.transcript_edit.toPlainText()
             self.current_note["summary"] = self.summary_edit.toPlainText()
         return self.current_note
+
+    def generate_ai_summary(self):
+        transcript_text = self.transcript_edit.toPlainText().strip()
+        if not transcript_text:
+            QMessageBox.information(self, "Notice", "ไม่พบข้อความถอดเสียงสำหรับสรุป\nกรุณาบันทึกเสียงหรือถอดเสียงก่อนกดสรุปครับ")
+            return
+
+        self.summarize_btn.setEnabled(False)
+        self.summarize_btn.setText("⏳ กำลังวิเคราะห์และสรุปประเด็น...")
+        QApplication.processEvents()
+
+        try:
+            summary = self.audio_engine.generate_summary(transcript_text)
+            self.summary_edit.setText(summary)
+            if self.current_note:
+                self.current_note["summary"] = summary
+                self.current_note["transcript"] = transcript_text
+                self.db.add_or_update_note(self.current_note)
+                self.transcript_updated.emit(self.current_note)
+
+            QMessageBox.information(self, "สำเร็จ", "สรุปประเด็นสำคัญของเนื้อหาเสียงเรียบร้อยแล้ว!")
+        except Exception as e:
+            QMessageBox.critical(self, "ข้อผิดพลาด", f"เกิดข้อผิดพลาดในการสรุป:\n{str(e)}")
+        finally:
+            self.summarize_btn.setEnabled(True)
+            self.summarize_btn.setText("🤖 สรุปเนื้อหาเสียง (Summarize with AI)")
 
     def import_audio_file(self):
         if not self.current_note:
@@ -242,13 +284,9 @@ class TranscriptViewWidget(QWidget):
             new_transcript_block = "\n\n".join(all_transcripts)
 
             if len(target_paths) == 1 and len(audio_paths) > 1:
-                # If only one track was re-transcribed out of multiple, update or append
                 existing_transcript = self.current_note.get("transcript", "")
                 target_header = f"[{target_paths[0][0]}]"
                 if target_header in existing_transcript:
-                    # Replace track section if possible, or append
-                    parts = existing_transcript.split(target_header)
-                    # reconstruct
                     transcript_text = new_transcript_block
                 else:
                     transcript_text = (existing_transcript + "\n\n" + new_transcript_block).strip()
@@ -278,3 +316,10 @@ class TranscriptViewWidget(QWidget):
             clipboard = QGuiApplication.clipboard()
             clipboard.setText(text)
             QMessageBox.information(self, "Success", "คัดลอกข้อความถอดเสียงไปยังคลิปบอร์ดแล้ว")
+
+    def copy_summary(self):
+        text = self.summary_edit.toPlainText()
+        if text:
+            clipboard = QGuiApplication.clipboard()
+            clipboard.setText(text)
+            QMessageBox.information(self, "Success", "คัดลอกสรุป AI ไปยังคลิปบอร์ดแล้ว")
