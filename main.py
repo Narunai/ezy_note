@@ -1,13 +1,15 @@
 import sys
 import os
 import time
+import ctypes
+from ctypes import wintypes
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QTabWidget, QLabel, QLineEdit, QPushButton, QFrame, QMessageBox,
     QSystemTrayIcon, QMenu, QInputDialog
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QPoint
 from PySide6.QtGui import QIcon, QFont, QAction, QColor
 
 from database import NoteDatabase, MEDIA_DIR, DATA_DIR
@@ -19,6 +21,21 @@ from audio_player_widget import VoiceStudioTabWidget
 from audio_engine import AudioEngine
 from floating_widget import FloatingNoteWidget
 from custom_titlebar import CustomTitleBar
+
+# Win32 Constants for Native Windows Snap & Aero Docking
+WM_NCCALCSIZE = 0x0083
+WM_NCHITTEST  = 0x0084
+
+HTCLIENT     = 1
+HTCAPTION    = 2
+HTLEFT       = 10
+HTRIGHT      = 11
+HTTOP        = 12
+HTTOPLEFT    = 13
+HTTOPRIGHT   = 14
+HTBOTTOM     = 15
+HTBOTTOMLEFT = 16
+HTBOTTOMRIGHT= 17
 
 class NoteGodApp(QMainWindow):
     def __init__(self):
@@ -161,46 +178,64 @@ class NoteGodApp(QMainWindow):
         self.auto_save_timer.timeout.connect(self.auto_save)
         self.auto_save_timer.start(5000)
 
-    def get_resize_edge(self, pos):
-        margin = 8
-        edge = Qt.Edge(0)
-        w = self.width()
-        h = self.height()
-        if pos.x() <= margin:
-            edge |= Qt.LeftEdge
-        elif pos.x() >= w - margin:
-            edge |= Qt.RightEdge
-        if pos.y() <= margin:
-            edge |= Qt.TopEdge
-        elif pos.y() >= h - margin:
-            edge |= Qt.BottomEdge
-        return edge
+    def showEvent(self, event):
+        super().showEvent(event)
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            style = user32.GetWindowLongW(hwnd, -16)  # GWL_STYLE
+            # Enable WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU | WS_CAPTION
+            style |= 0x00040000 | 0x00010000 | 0x00020000 | 0x00080000 | 0x00C00000
+            user32.SetWindowLongW(hwnd, -16, style)
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0027)  # SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+        except Exception:
+            pass
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-            edge = self.get_resize_edge(pos)
-            if edge != Qt.Edge(0):
-                wh = self.windowHandle()
-                if wh and wh.startSystemResize(edge):
-                    event.accept()
-                    return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        edge = self.get_resize_edge(pos)
-        if edge in (Qt.LeftEdge | Qt.TopEdge, Qt.RightEdge | Qt.BottomEdge):
-            self.setCursor(Qt.SizeFDiagCursor)
-        elif edge in (Qt.RightEdge | Qt.TopEdge, Qt.LeftEdge | Qt.BottomEdge):
-            self.setCursor(Qt.SizeBDiagCursor)
-        elif edge in (Qt.LeftEdge, Qt.RightEdge):
-            self.setCursor(Qt.SizeHorCursor)
-        elif edge in (Qt.TopEdge, Qt.BottomEdge):
-            self.setCursor(Qt.SizeVerCursor)
-        else:
-            self.unsetCursor()
-        super().mouseMoveEvent(event)
+    def nativeEvent(self, eventType, message):
+        try:
+            msg = wintypes.MSG.from_address(message.__int__())
+            if msg.message == WM_NCCALCSIZE:
+                # Remove default native window frame borders while preserving native Aero Snap & shadows
+                return True, 0
+            elif msg.message == WM_NCHITTEST:
+                x = wintypes.SHORT(msg.lParam & 0xFFFF).value
+                y = wintypes.SHORT((msg.lParam >> 16) & 0xFFFF).value
+                pt = self.mapFromGlobal(QPoint(x, y))
+                
+                margin = 8
+                w = self.width()
+                h = self.height()
+                
+                # Check corners
+                if pt.x() < margin and pt.y() < margin:
+                    return True, HTTOPLEFT
+                if pt.x() > w - margin and pt.y() < margin:
+                    return True, HTTOPRIGHT
+                if pt.x() < margin and pt.y() > h - margin:
+                    return True, HTBOTTOMLEFT
+                if pt.x() > w - margin and pt.y() > h - margin:
+                    return True, HTBOTTOMRIGHT
+                    
+                # Check edges
+                if pt.x() < margin:
+                    return True, HTLEFT
+                if pt.x() > w - margin:
+                    return True, HTRIGHT
+                if pt.y() < margin:
+                    return True, HTTOP
+                if pt.y() > h - margin:
+                    return True, HTBOTTOM
+                    
+                # Check TitleBar area for native Windows Snap & Dragging
+                if hasattr(self, 'title_bar') and self.title_bar.geometry().contains(pt):
+                    btn_pt = self.title_bar.mapFromParent(pt)
+                    child = self.title_bar.childAt(btn_pt)
+                    if child and isinstance(child, QPushButton):
+                        return True, HTCLIENT
+                    return True, HTCAPTION
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
 
     def toggle_window(self):
         if self.isVisible():

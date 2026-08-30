@@ -22,7 +22,7 @@ class CustomTitleBar(QWidget):
 
         layout.addStretch()
 
-        # Window Control Buttons - Monochrome
+        # Window Control Buttons
         self.min_btn = QPushButton("—")
         self.min_btn.setObjectName("TitleBarBtn")
         self.min_btn.setFixedSize(28, 22)
@@ -51,27 +51,6 @@ class CustomTitleBar(QWidget):
         else:
             self.window.showMaximized()
             self.max_btn.setText("❐")
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            wh = self.window.windowHandle()
-            if wh and wh.startSystemMove():
-                event.accept()
-                return
-            
-            self.is_dragging = True
-            self.drag_position = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self.is_dragging and event.buttons() == Qt.LeftButton:
-            self.window.move(event.globalPosition().toPoint() - self.drag_position)
-            event.accept()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.is_dragging = False
-            event.accept()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
