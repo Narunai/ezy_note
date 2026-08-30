@@ -120,20 +120,20 @@ class NoteGodApp(QMainWindow):
         # 3 Dedicated Tabs Widget
         self.tabs = QTabWidget()
 
-        # Tab 0: 📝 Note Paper (Maximum height, uncluttered, Word/Teams image integration)
+        # Tab 0: 📝 Notepad (Pure, distraction-free Notepad workspace)
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
         self.editor_tab.switch_to_voice_requested.connect(lambda: self.tabs.setCurrentIndex(1))
-        self.tabs.addTab(self.editor_tab, "📝 Note Paper")
+        self.tabs.addTab(self.editor_tab, "📝 Notepad")
 
-        # Tab 1: 🎙️ Voice & Audio Studio (Dedicated Studio for Audio Recording & Multi-Track Playback)
+        # Tab 1: 🎙️ Voice Studio (Dedicated Studio for Audio Recording & Multi-Track Playback)
         self.voice_tab = VoiceStudioTabWidget(self.audio_engine, self.db)
         self.voice_tab.audio_files_updated.connect(self.on_audio_files_updated)
         self.tabs.addTab(self.voice_tab, "🎙️ Voice Studio")
 
-        # Tab 2: 🤖 Transcript & AI Summary (AI Meeting Summary & Topic Extraction)
+        # Tab 2: 🤖 AI Summary (AI Meeting Summary & Topic Extraction)
         self.transcript_tab = TranscriptViewWidget(self.audio_engine, self.db)
         self.transcript_tab.transcript_updated.connect(self.on_transcript_updated)
-        self.tabs.addTab(self.transcript_tab, "🤖 Transcript & AI Summary")
+        self.tabs.addTab(self.transcript_tab, "🤖 AI Summary")
 
         self.tabs.currentChanged.connect(self.on_tab_changed)
 

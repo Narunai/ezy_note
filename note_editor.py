@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QSize, QPoint
 from PySide6.QtGui import (
     QPixmap, QIcon, QImage, QFont, QColor, QTextCursor, 
-    QTextImageFormat, QAction
+    QTextImageFormat, QAction, QKeySequence, QShortcut
 )
 
 from lightbox import ImageLightboxDialog
@@ -19,6 +19,31 @@ class NotePaperTextEdit(QTextEdit):
     image_pasted = Signal(str)
     image_double_clicked = Signal(str, object)  # (path, cursor)
     document_modified = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptRichText(True)
+        # Enable standard Notepad keyboard shortcuts
+        self.setup_shortcuts()
+
+    def setup_shortcuts(self):
+        # Ctrl+B -> Bold
+        QShortcut(QKeySequence.Bold, self, self.toggle_bold)
+        # Ctrl+I -> Italic
+        QShortcut(QKeySequence.Italic, self, self.toggle_italic)
+        # Ctrl+U -> Underline
+        QShortcut(QKeySequence.Underline, self, self.toggle_underline)
+
+    def toggle_bold(self):
+        fmt = self.currentCharFormat()
+        weight = QFont.Normal if fmt.fontWeight() == QFont.Bold else QFont.Bold
+        self.setFontWeight(weight)
+
+    def toggle_italic(self):
+        self.setFontItalic(not self.fontItalic())
+
+    def toggle_underline(self):
+        self.setFontUnderline(not self.fontUnderline())
 
     def insertFromMimeData(self, source):
         if source.hasImage():
@@ -61,25 +86,26 @@ class NotePaperTextEdit(QTextEdit):
         cursor = self.cursorForPosition(event.pos())
         char_fmt = cursor.charFormat()
         
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #201D1A;
+                color: #F5EFE6;
+                border: 1px solid #3D3730;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 5px 16px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #8B5E3C;
+                color: #FFFFFF;
+            }
+        """)
+
         if char_fmt.isImageFormat():
-            menu = QMenu(self)
-            menu.setStyleSheet("""
-                QMenu {
-                    background-color: #201D1A;
-                    color: #F5EFE6;
-                    border: 1px solid #3D3730;
-                    border-radius: 6px;
-                    padding: 4px;
-                }
-                QMenu::item {
-                    padding: 6px 16px;
-                    border-radius: 4px;
-                }
-                QMenu::item:selected {
-                    background-color: #8B5E3C;
-                    color: #FFFFFF;
-                }
-            """)
             img_fmt = char_fmt.toImageFormat()
             img_path = img_fmt.name()
 
@@ -108,11 +134,33 @@ class NotePaperTextEdit(QTextEdit):
             menu.addSeparator()
             del_act = menu.addAction("🗑️ Delete Image (ลบรูปภาพนี้)")
             del_act.triggered.connect(lambda: self.delete_image_at_cursor(cursor))
+        else:
+            # Standard Notepad Edit Options
+            undo_act = menu.addAction("Undo (Ctrl+Z)")
+            undo_act.triggered.connect(self.undo)
+            undo_act.setEnabled(self.document().isUndoAvailable())
 
-            menu.exec(event.globalPos())
-            return
+            redo_act = menu.addAction("Redo (Ctrl+Y)")
+            redo_act.triggered.connect(self.redo)
+            redo_act.setEnabled(self.document().isRedoAvailable())
 
-        super().contextMenuEvent(event)
+            menu.addSeparator()
+            cut_act = menu.addAction("Cut (Ctrl+X)")
+            cut_act.triggered.connect(self.cut)
+            cut_act.setEnabled(self.textCursor().hasSelection())
+
+            copy_act = menu.addAction("Copy (Ctrl+C)")
+            copy_act.triggered.connect(self.copy)
+            copy_act.setEnabled(self.textCursor().hasSelection())
+
+            paste_act = menu.addAction("Paste (Ctrl+V)")
+            paste_act.triggered.connect(self.paste)
+
+            menu.addSeparator()
+            sel_all_act = menu.addAction("Select All (Ctrl+A)")
+            sel_all_act.triggered.connect(self.selectAll)
+
+        menu.exec(event.globalPos())
 
     def resize_image_at_cursor(self, cursor, width):
         char_fmt = cursor.charFormat()
@@ -144,17 +192,16 @@ class NoteEditorWidget(QWidget):
         self.current_note = None
 
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(6, 4, 6, 6)
+        self.layout.setContentsMargins(6, 4, 6, 4)
         self.layout.setSpacing(4)
 
-        # 1. Single Unified Sleek Toolbar (Combines Text Formatting + Image Insert + Quick Mic)
+        # 1. Sleek Optional Format Toolbar (Hidden by default for true Notepad minimalism)
         self.toolbar_frame = QFrame()
         self.toolbar_frame.setObjectName("FormatToolbar")
         tb_layout = QHBoxLayout(self.toolbar_frame)
         tb_layout.setContentsMargins(6, 2, 6, 2)
         tb_layout.setSpacing(5)
 
-        # Text Formatting Tools
         self.btn_bold = QPushButton("B")
         self.btn_bold.setCheckable(True)
         self.btn_bold.setFixedSize(24, 22)
@@ -199,28 +246,9 @@ class NoteEditorWidget(QWidget):
         self.btn_color.clicked.connect(self.choose_text_color)
         tb_layout.addWidget(self.btn_color)
 
-        # Divider
         div1 = QLabel("|")
         div1.setStyleSheet("color: #332E28; font-size: 12px; margin: 0 4px;")
         tb_layout.addWidget(div1)
-
-        # Image Tools (Placement & Size)
-        img_pos_lbl = QLabel("Image:")
-        img_pos_lbl.setStyleSheet("font-size: 11px; color: #D4A373; font-weight: bold;")
-        tb_layout.addWidget(img_pos_lbl)
-
-        self.radio_inline = QRadioButton("Inline")
-        self.radio_top = QRadioButton("Top")
-        self.radio_bottom = QRadioButton("Bottom")
-
-        self.radio_inline.setStyleSheet("font-size: 11px;")
-        self.radio_top.setStyleSheet("font-size: 11px;")
-        self.radio_bottom.setStyleSheet("font-size: 11px;")
-        self.radio_inline.setChecked(True)
-
-        tb_layout.addWidget(self.radio_inline)
-        tb_layout.addWidget(self.radio_top)
-        tb_layout.addWidget(self.radio_bottom)
 
         self.img_size_combo = QComboBox()
         self.img_size_combo.setView(QListView())
@@ -228,7 +256,7 @@ class NoteEditorWidget(QWidget):
         self.img_size_combo.addItem("Small (180px)", 180)
         self.img_size_combo.addItem("Medium (240px)", 240)
         self.img_size_combo.addItem("Large (360px)", 360)
-        self.img_size_combo.setCurrentIndex(1)  # Default: 240px
+        self.img_size_combo.setCurrentIndex(1)
         tb_layout.addWidget(self.img_size_combo)
 
         self.add_img_btn = QPushButton("📷 + Image")
@@ -241,53 +269,74 @@ class NoteEditorWidget(QWidget):
 
         tb_layout.addStretch()
 
-        # Quick Mic shortcut button
-        self.quick_mic_btn = QPushButton("🎙️ Voice Studio")
-        self.quick_mic_btn.setObjectName("SecondaryButton")
-        self.quick_mic_btn.setCursor(Qt.PointingHandCursor)
-        self.quick_mic_btn.setStyleSheet("font-size: 11px; padding: 2px 8px; color: #F59E0B;")
-        self.quick_mic_btn.setToolTip("Switch to Audio & Voice Studio tab")
-        self.quick_mic_btn.clicked.connect(self.switch_to_voice_requested.emit)
-        tb_layout.addWidget(self.quick_mic_btn)
+        close_tb_btn = QPushButton("✕")
+        close_tb_btn.setObjectName("SecondaryButton")
+        close_tb_btn.setFixedSize(20, 20)
+        close_tb_btn.setStyleSheet("font-size: 10px; padding: 0px;")
+        close_tb_btn.setToolTip("Hide toolbar")
+        close_tb_btn.clicked.connect(lambda: self.toolbar_frame.hide())
+        tb_layout.addWidget(close_tb_btn)
 
-        # Toggle Toolbar button
-        self.toggle_tb_btn = QPushButton("▲ Hide")
-        self.toggle_tb_btn.setObjectName("SecondaryButton")
-        self.toggle_tb_btn.setCursor(Qt.PointingHandCursor)
-        self.toggle_tb_btn.setStyleSheet("font-size: 10px; padding: 2px 6px;")
-        self.toggle_tb_btn.setToolTip("Collapse toolbar for Focus Mode")
-        self.toggle_tb_btn.clicked.connect(self.toggle_toolbar)
-        tb_layout.addWidget(self.toggle_tb_btn)
-
+        self.toolbar_frame.hide()  # Hidden by default for clean Notepad feel
         self.layout.addWidget(self.toolbar_frame)
 
-        # Mini collapsed expander button (hidden by default)
-        self.expand_tb_btn = QPushButton("🛠️ Show Tools")
-        self.expand_tb_btn.setObjectName("SecondaryButton")
-        self.expand_tb_btn.setCursor(Qt.PointingHandCursor)
-        self.expand_tb_btn.setStyleSheet("font-size: 10px; padding: 2px 8px; max-width: 90px;")
-        self.expand_tb_btn.clicked.connect(self.toggle_toolbar)
-        self.expand_tb_btn.hide()
-        self.layout.addWidget(self.expand_tb_btn)
-
-        # 2. Single Unified Clean Warm Note Paper Text Editor (Maximum Height Canvas)
+        # 2. Notepad Paper Canvas (Fills entire height smoothly)
         self.text_edit = NotePaperTextEdit()
         self.text_edit.setObjectName("NotePaperEdit")
-        self.text_edit.setPlaceholderText("Start writing your note here... (Paste Ctrl+V to add images inline, right-click to resize)")
+        self.text_edit.setPlaceholderText("Start typing your note here... (Paste Ctrl+V to add images)")
         self.text_edit.image_pasted.connect(self.on_image_pasted)
         self.text_edit.image_double_clicked.connect(self.open_lightbox)
         self.text_edit.document_modified.connect(self.on_document_modified)
-        self.text_edit.selectionChanged.connect(self.update_format_buttons_state)
+        self.text_edit.cursorPositionChanged.connect(self.update_status_bar)
+        self.text_edit.textChanged.connect(self.update_status_bar)
 
         self.layout.addWidget(self.text_edit, 1)
+
+        # 3. Minimalist Notepad Status Bar at Bottom (Slim, Non-intrusive)
+        status_bar = QFrame()
+        status_bar.setStyleSheet("background-color: transparent; padding: 0px 4px;")
+        sb_layout = QHBoxLayout(status_bar)
+        sb_layout.setContentsMargins(4, 1, 4, 1)
+        sb_layout.setSpacing(8)
+
+        self.status_lbl = QLabel("Ln 1, Col 1 | 0 words")
+        self.status_lbl.setStyleSheet("color: #78716C; font-size: 10px;")
+        sb_layout.addWidget(self.status_lbl)
+
+        sb_layout.addStretch()
+
+        self.tool_toggle_btn = QPushButton("🛠️ Tools")
+        self.tool_toggle_btn.setObjectName("SecondaryButton")
+        self.tool_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.tool_toggle_btn.setStyleSheet("font-size: 10px; padding: 1px 6px;")
+        self.tool_toggle_btn.setToolTip("Toggle Text Formatting & Image Bar")
+        self.tool_toggle_btn.clicked.connect(self.toggle_toolbar)
+        sb_layout.addWidget(self.tool_toggle_btn)
+
+        self.quick_mic_btn = QPushButton("🎙️ Voice")
+        self.quick_mic_btn.setObjectName("SecondaryButton")
+        self.quick_mic_btn.setCursor(Qt.PointingHandCursor)
+        self.quick_mic_btn.setStyleSheet("font-size: 10px; padding: 1px 6px; color: #F59E0B;")
+        self.quick_mic_btn.setToolTip("Switch to Voice Studio")
+        self.quick_mic_btn.clicked.connect(self.switch_to_voice_requested.emit)
+        sb_layout.addWidget(self.quick_mic_btn)
+
+        self.layout.addWidget(status_bar)
 
     def toggle_toolbar(self):
         if self.toolbar_frame.isVisible():
             self.toolbar_frame.hide()
-            self.expand_tb_btn.show()
         else:
             self.toolbar_frame.show()
-            self.expand_tb_btn.hide()
+
+    def update_status_bar(self):
+        cursor = self.text_edit.textCursor()
+        line = cursor.blockNumber() + 1
+        col = cursor.columnNumber() + 1
+        text = self.text_edit.toPlainText().strip()
+        words = len(text.split()) if text else 0
+        chars = len(text)
+        self.status_lbl.setText(f"Ln {line}, Col {col} | {words} words | {chars} chars")
 
     def set_bold(self):
         is_bold = self.btn_bold.isChecked()
@@ -309,31 +358,11 @@ class NoteEditorWidget(QWidget):
         if color.isValid():
             self.text_edit.setTextColor(color)
 
-    def update_format_buttons_state(self):
-        self.btn_bold.blockSignals(True)
-        self.btn_italic.blockSignals(True)
-        self.btn_underline.blockSignals(True)
-
-        self.btn_bold.setChecked(self.text_edit.fontWeight() == QFont.Bold)
-        self.btn_italic.setChecked(self.text_edit.fontItalic())
-        self.btn_underline.setChecked(self.text_edit.fontUnderline())
-
-        self.btn_bold.blockSignals(False)
-        self.btn_italic.blockSignals(False)
-        self.btn_underline.blockSignals(False)
-
     def load_note(self, note):
         self.current_note = note
         html = note.get("content_html") or note.get("content", "")
         self.text_edit.setHtml(html)
-        
-        pos = note.get("image_position", "inline")
-        if pos == "top":
-            self.radio_top.setChecked(True)
-        elif pos == "bottom":
-            self.radio_bottom.setChecked(True)
-        else:
-            self.radio_inline.setChecked(True)
+        self.update_status_bar()
 
     def get_current_data(self):
         if not self.current_note:
@@ -341,14 +370,6 @@ class NoteEditorWidget(QWidget):
         
         self.current_note["content"] = self.text_edit.toPlainText()
         self.current_note["content_html"] = self.text_edit.toHtml()
-
-        if self.radio_top.isChecked():
-            self.current_note["image_position"] = "top"
-        elif self.radio_bottom.isChecked():
-            self.current_note["image_position"] = "bottom"
-        else:
-            self.current_note["image_position"] = "inline"
-            
         return self.current_note
 
     def upload_image(self):
@@ -372,26 +393,14 @@ class NoteEditorWidget(QWidget):
             return
 
         cursor = self.text_edit.textCursor()
-        
-        # Get selected width (default: compact 240px)
         img_w = self.img_size_combo.currentData() or 240
 
         fmt = QTextImageFormat()
         fmt.setName(file_path)
         fmt.setWidth(img_w)
 
-        if self.radio_top.isChecked():
-            cursor.movePosition(QTextCursor.Start)
-            cursor.insertImage(fmt)
-            cursor.insertBlock()
-        elif self.radio_bottom.isChecked():
-            cursor.movePosition(QTextCursor.End)
-            cursor.insertBlock()
-            cursor.insertImage(fmt)
-            cursor.insertBlock()
-        else: # Inline at cursor
-            cursor.insertImage(fmt)
-            cursor.insertBlock()
+        cursor.insertImage(fmt)
+        cursor.insertBlock()
 
         self.text_edit.setTextCursor(cursor)
         self.text_edit.setFocus()
