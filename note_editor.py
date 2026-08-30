@@ -14,7 +14,6 @@ from PySide6.QtGui import (
 
 from lightbox import ImageLightboxDialog
 from database import MEDIA_DIR
-from audio_player_widget import InAppAudioPlayerWidget
 
 class NotePaperTextEdit(QTextEdit):
     image_pasted = Signal(str)
@@ -91,20 +90,20 @@ class NotePaperTextEdit(QTextEdit):
             size_menu = menu.addMenu("📐 Resize Image (ปรับขนาดรูปภาพ)")
             size_menu.setStyleSheet(menu.styleSheet())
 
-            act_200 = size_menu.addAction("Small (200px)")
-            act_200.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 200))
+            act_180 = size_menu.addAction("Small (180px)")
+            act_180.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 180))
 
-            act_320 = size_menu.addAction("Medium (320px)")
-            act_320.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 320))
+            act_260 = size_menu.addAction("Medium (260px)")
+            act_260.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 260))
 
-            act_480 = size_menu.addAction("Large (480px)")
-            act_480.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 480))
+            act_380 = size_menu.addAction("Large (380px)")
+            act_380.triggered.connect(lambda: self.resize_image_at_cursor(cursor, 380))
 
-            act_full = size_menu.addAction("Fit Width (พอดีความกว้าง)")
-            act_full.triggered.connect(lambda: self.resize_image_at_cursor(cursor, max(300, self.viewport().width() - 40)))
+            act_full = size_menu.addAction("Fit Width (พอดีหน้าจอ)")
+            act_full.triggered.connect(lambda: self.resize_image_at_cursor(cursor, max(280, self.viewport().width() - 40)))
 
             act_custom = size_menu.addAction("Custom Width (กำหนดขนาดเอง)...")
-            act_custom.triggered.connect(lambda: self.prompt_custom_size(cursor, int(img_fmt.width() or 320)))
+            act_custom.triggered.connect(lambda: self.prompt_custom_size(cursor, int(img_fmt.width() or 240)))
 
             menu.addSeparator()
             del_act = menu.addAction("🗑️ Delete Image (ลบรูปภาพนี้)")
@@ -124,7 +123,7 @@ class NotePaperTextEdit(QTextEdit):
             self.document_modified.emit()
 
     def prompt_custom_size(self, cursor, current_w):
-        val, ok = QInputDialog.getInt(self, "Custom Image Size", "Enter image width in pixels (100 - 1200):", current_w, 100, 1200, 10)
+        val, ok = QInputDialog.getInt(self, "Custom Image Size", "Enter image width in pixels (100 - 1000):", current_w, 100, 1000, 10)
         if ok and val:
             self.resize_image_at_cursor(cursor, val)
 
@@ -136,6 +135,7 @@ class NotePaperTextEdit(QTextEdit):
 class NoteEditorWidget(QWidget):
     note_saved = Signal(dict)
     audio_files_updated = Signal(dict)
+    switch_to_voice_requested = Signal()
 
     def __init__(self, db, audio_engine, parent=None):
         super().__init__(parent)
@@ -144,133 +144,136 @@ class NoteEditorWidget(QWidget):
         self.current_note = None
 
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(6, 6, 6, 6)
-        self.layout.setSpacing(6)
+        self.layout.setContentsMargins(6, 4, 6, 6)
+        self.layout.setSpacing(4)
 
-        # Image Placement & Sizing Control Banner
-        pos_bar = QFrame()
-        pos_bar.setObjectName("ImagePosBanner")
-        pos_layout = QHBoxLayout(pos_bar)
-        pos_layout.setContentsMargins(8, 2, 8, 2)
-        pos_layout.setSpacing(8)
+        # 1. Single Unified Sleek Toolbar (Combines Text Formatting + Image Insert + Quick Mic)
+        self.toolbar_frame = QFrame()
+        self.toolbar_frame.setObjectName("FormatToolbar")
+        tb_layout = QHBoxLayout(self.toolbar_frame)
+        tb_layout.setContentsMargins(6, 2, 6, 2)
+        tb_layout.setSpacing(5)
 
-        pos_label = QLabel("Image Placement:")
-        pos_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 11px;")
-        pos_layout.addWidget(pos_label)
-
-        self.radio_top = QRadioButton("Above")
-        self.radio_inline = QRadioButton("Inline (At Cursor)")
-        self.radio_bottom = QRadioButton("Below")
-
-        self.radio_top.setStyleSheet("font-size: 11px;")
-        self.radio_inline.setStyleSheet("font-size: 11px;")
-        self.radio_bottom.setStyleSheet("font-size: 11px;")
-
-        self.radio_inline.setChecked(True)
-
-        self.radio_top.toggled.connect(self.on_image_pos_changed)
-        self.radio_inline.toggled.connect(self.on_image_pos_changed)
-        self.radio_bottom.toggled.connect(self.on_image_pos_changed)
-
-        pos_layout.addWidget(self.radio_inline)
-        pos_layout.addWidget(self.radio_top)
-        pos_layout.addWidget(self.radio_bottom)
-
-        size_label = QLabel("Size:")
-        size_label.setStyleSheet("font-weight: bold; color: #D4A373; font-size: 11px; margin-left: 6px;")
-        pos_layout.addWidget(size_label)
-
-        self.img_size_combo = QComboBox()
-        self.img_size_combo.setView(QListView())
-        self.img_size_combo.setStyleSheet("min-width: 95px; font-size: 11px;")
-        self.img_size_combo.addItem("Small (200px)", 200)
-        self.img_size_combo.addItem("Medium (320px)", 320)
-        self.img_size_combo.addItem("Large (480px)", 480)
-        self.img_size_combo.addItem("Full Width", 640)
-        self.img_size_combo.setCurrentIndex(1)  # Default: Medium (320px)
-        pos_layout.addWidget(self.img_size_combo)
-
-        pos_layout.addStretch()
-
-        paste_hint = QLabel("Ctrl+V / Right-Click to Resize")
-        paste_hint.setStyleSheet("color: #D4A373; font-size: 11px; font-weight: bold;")
-        pos_layout.addWidget(paste_hint)
-
-        self.add_img_btn = QPushButton("+ Insert Image")
-        self.add_img_btn.setObjectName("SecondaryButton")
-        self.add_img_btn.setCursor(Qt.PointingHandCursor)
-        self.add_img_btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
-        self.add_img_btn.clicked.connect(self.upload_image)
-        pos_layout.addWidget(self.add_img_btn)
-
-        self.layout.addWidget(pos_bar)
-
-        # Text Formatting Toolbar (Bold, Italic, Underline, Size, Color)
-        fmt_toolbar = QFrame()
-        fmt_toolbar.setObjectName("FormatToolbar")
-        fmt_layout = QHBoxLayout(fmt_toolbar)
-        fmt_layout.setContentsMargins(6, 2, 6, 2)
-        fmt_layout.setSpacing(6)
-
-        fmt_label = QLabel("Text Format:")
-        fmt_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #D4A373;")
-        fmt_layout.addWidget(fmt_label)
-
+        # Text Formatting Tools
         self.btn_bold = QPushButton("B")
         self.btn_bold.setCheckable(True)
-        self.btn_bold.setFixedSize(26, 22)
+        self.btn_bold.setFixedSize(24, 22)
         self.btn_bold.setStyleSheet("font-weight: bold; font-size: 11px;")
-        self.btn_bold.setToolTip("Bold")
+        self.btn_bold.setToolTip("Bold (Ctrl+B)")
         self.btn_bold.clicked.connect(self.set_bold)
-        fmt_layout.addWidget(self.btn_bold)
+        tb_layout.addWidget(self.btn_bold)
 
         self.btn_italic = QPushButton("I")
         self.btn_italic.setCheckable(True)
-        self.btn_italic.setFixedSize(26, 22)
+        self.btn_italic.setFixedSize(24, 22)
         self.btn_italic.setStyleSheet("font-style: italic; font-weight: bold; font-size: 11px;")
-        self.btn_italic.setToolTip("Italic")
+        self.btn_italic.setToolTip("Italic (Ctrl+I)")
         self.btn_italic.clicked.connect(self.set_italic)
-        fmt_layout.addWidget(self.btn_italic)
+        tb_layout.addWidget(self.btn_italic)
 
         self.btn_underline = QPushButton("U")
         self.btn_underline.setCheckable(True)
-        self.btn_underline.setFixedSize(26, 22)
+        self.btn_underline.setFixedSize(24, 22)
         self.btn_underline.setStyleSheet("font-weight: bold; font-size: 11px;")
-        self.btn_underline.setToolTip("Underline")
+        self.btn_underline.setToolTip("Underline (Ctrl+U)")
         self.btn_underline.clicked.connect(self.set_underline)
-        fmt_layout.addWidget(self.btn_underline)
+        tb_layout.addWidget(self.btn_underline)
 
         font_size_label = QLabel("Size:")
         font_size_label.setStyleSheet("font-size: 11px; color: #A89F91;")
-        fmt_layout.addWidget(font_size_label)
+        tb_layout.addWidget(font_size_label)
 
         self.size_combo = QComboBox()
         self.size_combo.setView(QListView())
-        self.size_combo.setStyleSheet("min-width: 55px;")
-        for size in [12, 14, 16, 18, 20, 24, 28, 32, 36]:
+        self.size_combo.setStyleSheet("min-width: 48px; font-size: 11px;")
+        for size in [12, 14, 16, 18, 20, 24, 28, 32]:
             self.size_combo.addItem(str(size), size)
         self.size_combo.setCurrentText("14")
         self.size_combo.currentIndexChanged.connect(self.on_size_changed)
-        fmt_layout.addWidget(self.size_combo)
+        tb_layout.addWidget(self.size_combo)
 
-        color_label = QLabel("Color:")
-        color_label.setStyleSheet("font-size: 11px; color: #A89F91;")
-        fmt_layout.addWidget(color_label)
-
-        self.btn_color = QPushButton("A Color")
+        self.btn_color = QPushButton("Color")
         self.btn_color.setObjectName("SecondaryButton")
-        self.btn_color.setStyleSheet("font-size: 11px; padding: 2px 8px; font-weight: bold;")
+        self.btn_color.setStyleSheet("font-size: 11px; padding: 2px 6px; font-weight: bold;")
         self.btn_color.setToolTip("Choose Text Color")
         self.btn_color.clicked.connect(self.choose_text_color)
-        fmt_layout.addWidget(self.btn_color)
+        tb_layout.addWidget(self.btn_color)
 
-        fmt_layout.addStretch()
-        self.layout.addWidget(fmt_toolbar)
+        # Divider
+        div1 = QLabel("|")
+        div1.setStyleSheet("color: #332E28; font-size: 12px; margin: 0 4px;")
+        tb_layout.addWidget(div1)
 
-        # Single Unified Clean Warm Note Paper Text Editor (Images & Text integrated seamlessly)
+        # Image Tools (Placement & Size)
+        img_pos_lbl = QLabel("Image:")
+        img_pos_lbl.setStyleSheet("font-size: 11px; color: #D4A373; font-weight: bold;")
+        tb_layout.addWidget(img_pos_lbl)
+
+        self.radio_inline = QRadioButton("Inline")
+        self.radio_top = QRadioButton("Top")
+        self.radio_bottom = QRadioButton("Bottom")
+
+        self.radio_inline.setStyleSheet("font-size: 11px;")
+        self.radio_top.setStyleSheet("font-size: 11px;")
+        self.radio_bottom.setStyleSheet("font-size: 11px;")
+        self.radio_inline.setChecked(True)
+
+        tb_layout.addWidget(self.radio_inline)
+        tb_layout.addWidget(self.radio_top)
+        tb_layout.addWidget(self.radio_bottom)
+
+        self.img_size_combo = QComboBox()
+        self.img_size_combo.setView(QListView())
+        self.img_size_combo.setStyleSheet("min-width: 85px; font-size: 11px;")
+        self.img_size_combo.addItem("Small (180px)", 180)
+        self.img_size_combo.addItem("Medium (240px)", 240)
+        self.img_size_combo.addItem("Large (360px)", 360)
+        self.img_size_combo.setCurrentIndex(1)  # Default: 240px
+        tb_layout.addWidget(self.img_size_combo)
+
+        self.add_img_btn = QPushButton("📷 + Image")
+        self.add_img_btn.setObjectName("SecondaryButton")
+        self.add_img_btn.setCursor(Qt.PointingHandCursor)
+        self.add_img_btn.setStyleSheet("padding: 2px 6px; font-size: 11px;")
+        self.add_img_btn.setToolTip("Insert image into note")
+        self.add_img_btn.clicked.connect(self.upload_image)
+        tb_layout.addWidget(self.add_img_btn)
+
+        tb_layout.addStretch()
+
+        # Quick Mic shortcut button
+        self.quick_mic_btn = QPushButton("🎙️ Voice Studio")
+        self.quick_mic_btn.setObjectName("SecondaryButton")
+        self.quick_mic_btn.setCursor(Qt.PointingHandCursor)
+        self.quick_mic_btn.setStyleSheet("font-size: 11px; padding: 2px 8px; color: #F59E0B;")
+        self.quick_mic_btn.setToolTip("Switch to Audio & Voice Studio tab")
+        self.quick_mic_btn.clicked.connect(self.switch_to_voice_requested.emit)
+        tb_layout.addWidget(self.quick_mic_btn)
+
+        # Toggle Toolbar button
+        self.toggle_tb_btn = QPushButton("▲ Hide")
+        self.toggle_tb_btn.setObjectName("SecondaryButton")
+        self.toggle_tb_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_tb_btn.setStyleSheet("font-size: 10px; padding: 2px 6px;")
+        self.toggle_tb_btn.setToolTip("Collapse toolbar for Focus Mode")
+        self.toggle_tb_btn.clicked.connect(self.toggle_toolbar)
+        tb_layout.addWidget(self.toggle_tb_btn)
+
+        self.layout.addWidget(self.toolbar_frame)
+
+        # Mini collapsed expander button (hidden by default)
+        self.expand_tb_btn = QPushButton("🛠️ Show Tools")
+        self.expand_tb_btn.setObjectName("SecondaryButton")
+        self.expand_tb_btn.setCursor(Qt.PointingHandCursor)
+        self.expand_tb_btn.setStyleSheet("font-size: 10px; padding: 2px 8px; max-width: 90px;")
+        self.expand_tb_btn.clicked.connect(self.toggle_toolbar)
+        self.expand_tb_btn.hide()
+        self.layout.addWidget(self.expand_tb_btn)
+
+        # 2. Single Unified Clean Warm Note Paper Text Editor (Maximum Height Canvas)
         self.text_edit = NotePaperTextEdit()
         self.text_edit.setObjectName("NotePaperEdit")
-        self.text_edit.setPlaceholderText("Type note text here... Insert or paste images directly inline, above, or below like Word / Teams! (Right-click image or double-click to resize)")
+        self.text_edit.setPlaceholderText("Start writing your note here... (Paste Ctrl+V to add images inline, right-click to resize)")
         self.text_edit.image_pasted.connect(self.on_image_pasted)
         self.text_edit.image_double_clicked.connect(self.open_lightbox)
         self.text_edit.document_modified.connect(self.on_document_modified)
@@ -278,12 +281,13 @@ class NoteEditorWidget(QWidget):
 
         self.layout.addWidget(self.text_edit, 1)
 
-        # In-App Audio Player Widget
-        self.audio_player = InAppAudioPlayerWidget()
-        self.audio_player.recording_requested.connect(self.toggle_recording)
-        self.audio_player.import_requested.connect(self.import_audio_file)
-        self.audio_player.audio_deleted.connect(self.delete_audio_track)
-        self.layout.addWidget(self.audio_player)
+    def toggle_toolbar(self):
+        if self.toolbar_frame.isVisible():
+            self.toolbar_frame.hide()
+            self.expand_tb_btn.show()
+        else:
+            self.toolbar_frame.show()
+            self.expand_tb_btn.hide()
 
     def set_bold(self):
         is_bold = self.btn_bold.isChecked()
@@ -331,9 +335,6 @@ class NoteEditorWidget(QWidget):
         else:
             self.radio_inline.setChecked(True)
 
-        audio_files = note.get("audio_files", [])
-        self.audio_player.load_audio_files(audio_files)
-
     def get_current_data(self):
         if not self.current_note:
             self.current_note = {}
@@ -349,15 +350,6 @@ class NoteEditorWidget(QWidget):
             self.current_note["image_position"] = "inline"
             
         return self.current_note
-
-    def on_image_pos_changed(self):
-        if self.current_note:
-            if self.radio_top.isChecked():
-                self.current_note["image_position"] = "top"
-            elif self.radio_bottom.isChecked():
-                self.current_note["image_position"] = "bottom"
-            else:
-                self.current_note["image_position"] = "inline"
 
     def upload_image(self):
         if not self.current_note:
@@ -381,8 +373,8 @@ class NoteEditorWidget(QWidget):
 
         cursor = self.text_edit.textCursor()
         
-        # Get selected width from img_size_combo
-        img_w = self.img_size_combo.currentData() or 320
+        # Get selected width (default: compact 240px)
+        img_w = self.img_size_combo.currentData() or 240
 
         fmt = QTextImageFormat()
         fmt.setName(file_path)
@@ -417,86 +409,3 @@ class NoteEditorWidget(QWidget):
         if cursor is not None:
             dlg.size_selected.connect(lambda w: self.text_edit.resize_image_at_cursor(cursor, w))
         dlg.exec()
-
-    def toggle_recording(self):
-        if not self.current_note:
-            QMessageBox.warning(self, "Warning", "Select or create a note before recording audio.")
-            return
-
-        if not self.audio_engine.is_recording:
-            self.audio_engine.start_recording()
-            self.audio_player.rec_btn.setText("Recording...")
-            self.audio_player.rec_btn.setStyleSheet("background-color: #DC2626; font-weight: bold; font-size: 11px; padding: 3px 8px;")
-        else:
-            path, duration = self.audio_engine.stop_recording()
-            self.audio_player.rec_btn.setText("+ Record Voice")
-            self.audio_player.rec_btn.setStyleSheet("background-color: #B91C1C; font-weight: bold; font-size: 11px; padding: 3px 8px;")
-            
-            audio_files = self.current_note.setdefault("audio_files", [])
-            track_name = f"Voice #{len(audio_files)+1}"
-            new_clip = {
-                "path": path,
-                "duration": duration,
-                "name": track_name
-            }
-            audio_files.append(new_clip)
-
-            transcript = self.audio_engine.transcribe_audio(path)
-            summary = self.audio_engine.generate_summary(transcript)
-            existing_tr = self.current_note.get("transcript", "")
-            self.current_note["transcript"] = (existing_tr + "\n\n" + f"[{track_name}]\n" + transcript).strip()
-            self.current_note["summary"] = summary
-
-            self.audio_player.load_audio_files(audio_files)
-            self.db.add_or_update_note(self.current_note)
-            self.audio_files_updated.emit(self.current_note)
-
-    def import_audio_file(self):
-        if not self.current_note:
-            QMessageBox.warning(self, "Warning", "Select or create a note before adding audio.")
-            return
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Import Audio File", "", "Audio Files (*.wav *.mp3 *.m4a *.aac *.flac *.ogg *.wma)"
-        )
-        if not file_path:
-            return
-
-        os.makedirs(MEDIA_DIR, exist_ok=True)
-        ext = os.path.splitext(file_path)[1]
-        dest_filename = f"audio_{int(time.time() * 1000)}{ext}"
-        dest_path = os.path.join(MEDIA_DIR, dest_filename)
-        shutil.copy2(file_path, dest_path)
-
-        duration = self.audio_engine.get_audio_duration(dest_path)
-        audio_files = self.current_note.setdefault("audio_files", [])
-        base_title = os.path.splitext(os.path.basename(file_path))[0]
-        track_name = f"{base_title[:18]}" if base_title else f"Audio #{len(audio_files)+1}"
-
-        new_clip = {
-            "path": dest_path,
-            "duration": duration,
-            "name": track_name
-        }
-        audio_files.append(new_clip)
-
-        transcript = self.audio_engine.transcribe_audio(dest_path)
-        summary = self.audio_engine.generate_summary(transcript)
-        existing_tr = self.current_note.get("transcript", "")
-        self.current_note["transcript"] = (existing_tr + "\n\n" + f"[{track_name}]\n" + transcript).strip()
-        self.current_note["summary"] = summary
-
-        self.audio_player.load_audio_files(audio_files)
-        self.db.add_or_update_note(self.current_note)
-        self.audio_files_updated.emit(self.current_note)
-
-    def delete_audio_track(self, track_obj):
-        if self.current_note and "audio_files" in self.current_note:
-            target_path = track_obj.get("path") if isinstance(track_obj, dict) else track_obj
-            self.current_note["audio_files"] = [
-                a for a in self.current_note["audio_files"] 
-                if (a.get("path") if isinstance(a, dict) else a) != target_path
-            ]
-            self.audio_player.load_audio_files(self.current_note["audio_files"])
-            self.db.add_or_update_note(self.current_note)
-            self.audio_files_updated.emit(self.current_note)

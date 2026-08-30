@@ -15,6 +15,7 @@ from style import QSS_STYLE
 from sidebar_widget import SidebarWidget
 from note_editor import NoteEditorWidget
 from transcript_view import TranscriptViewWidget
+from audio_player_widget import VoiceStudioTabWidget
 from audio_engine import AudioEngine
 from floating_widget import FloatingNoteWidget
 from custom_titlebar import CustomTitleBar
@@ -116,25 +117,30 @@ class NoteGodApp(QMainWindow):
 
         content_layout.addWidget(top_bar)
 
-        # Tabs Widget (Tab 1: Note & Media, Tab 2: Transcript & Summary)
+        # 3 Dedicated Tabs Widget
         self.tabs = QTabWidget()
 
-        # Tab 1: Note & Media (Word / Teams inline image paper canvas with interactive resizing)
+        # Tab 0: 📝 Note Paper (Maximum height, uncluttered, Word/Teams image integration)
         self.editor_tab = NoteEditorWidget(self.db, self.audio_engine)
-        self.editor_tab.audio_files_updated.connect(self.on_audio_files_updated)
-        self.tabs.addTab(self.editor_tab, "Note & Media")
+        self.editor_tab.switch_to_voice_requested.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.tabs.addTab(self.editor_tab, "📝 Note Paper")
 
-        # Tab 2: Transcript & Summary (AI Summary & Topic Extraction)
+        # Tab 1: 🎙️ Voice & Audio Studio (Dedicated Studio for Audio Recording & Multi-Track Playback)
+        self.voice_tab = VoiceStudioTabWidget(self.audio_engine, self.db)
+        self.voice_tab.audio_files_updated.connect(self.on_audio_files_updated)
+        self.tabs.addTab(self.voice_tab, "🎙️ Voice Studio")
+
+        # Tab 2: 🤖 Transcript & AI Summary (AI Meeting Summary & Topic Extraction)
         self.transcript_tab = TranscriptViewWidget(self.audio_engine, self.db)
         self.transcript_tab.transcript_updated.connect(self.on_transcript_updated)
-        self.tabs.addTab(self.transcript_tab, "Transcript & AI Summary")
+        self.tabs.addTab(self.transcript_tab, "🤖 Transcript & AI Summary")
 
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         content_layout.addWidget(self.tabs, 1)
         main_layout.addWidget(content_area, 1)
 
-        # 3. Create Floating Desktop Note Widget
+        # 4. Create Floating Desktop Note Widget
         self.floating_widget = FloatingNoteWidget()
         self.floating_widget.clicked.connect(self.toggle_window)
 
@@ -206,21 +212,19 @@ class NoteGodApp(QMainWindow):
     def on_tab_changed(self, index):
         if not self.current_note:
             return
-        if index == 1:
-            # Switched to Transcript tab -> sync note data from editor to transcript tab
-            editor_data = self.editor_tab.get_current_data()
-            if editor_data:
-                self.current_note.update(editor_data)
-            self.transcript_tab.load_note(self.current_note)
-        elif index == 0:
-            # Switched to Note Editor tab -> sync transcript data
-            transcript_data = self.transcript_tab.get_updated_data()
-            if transcript_data:
-                self.current_note.update(transcript_data)
+        if index == 0:
+            # Switched to Note Paper
             self.editor_tab.load_note(self.current_note)
+        elif index == 1:
+            # Switched to Voice Studio
+            self.voice_tab.load_note(self.current_note)
+        elif index == 2:
+            # Switched to Transcript & AI Summary
+            self.transcript_tab.load_note(self.current_note)
 
     def on_audio_files_updated(self, note):
         self.current_note = note
+        self.voice_tab.load_note(note)
         self.transcript_tab.load_note(note)
         self.sidebar.refresh_notes()
 
@@ -233,6 +237,7 @@ class NoteGodApp(QMainWindow):
         self.current_note = note
         self.title_input.setText(note.get("title", ""))
         self.editor_tab.load_note(note)
+        self.voice_tab.load_note(note)
         self.transcript_tab.load_note(note)
         self.save_status_label.setText("[Saved]")
 
@@ -275,9 +280,9 @@ class NoteGodApp(QMainWindow):
         if transcript_data:
             tr = transcript_data.get("transcript")
             sm = transcript_data.get("summary")
-            if tr or self.tabs.currentIndex() == 1:
+            if tr or self.tabs.currentIndex() == 2:
                 self.current_note["transcript"] = tr or ""
-            if sm or self.tabs.currentIndex() == 1:
+            if sm or self.tabs.currentIndex() == 2:
                 self.current_note["summary"] = sm or ""
 
         saved_note = self.db.add_or_update_note(self.current_note)
